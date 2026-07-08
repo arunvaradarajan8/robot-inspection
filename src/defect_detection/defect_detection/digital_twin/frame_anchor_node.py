@@ -6,6 +6,7 @@ from geometry_msgs.msg import TransformStamped
 from rclpy.duration import Duration
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import Bool, String
 from tf2_ros import Buffer, TransformBroadcaster, TransformException, TransformListener
@@ -79,11 +80,13 @@ class FrameAnchorNode(Node):
             self.anchor_request_callback,
             10,
         )
+        # Sensor-data QoS so the best-effort scan watcher publisher can
+        # connect; a reliable subscription never receives those scans.
         self.scan_subscription = self.create_subscription(
             PointCloud2,
             scan_topic,
             self.scan_callback,
-            10,
+            qos_profile_sensor_data,
         )
 
         self.anchor = self.load_anchor()

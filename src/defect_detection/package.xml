@@ -27,6 +27,9 @@
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>nav2_bringup</exec_depend>
   <exec_depend>rviz2</exec_depend>
+  <!-- Gazebo simulation only (ros2 launch defect_detection gazebo_sim.launch.xml). -->
+  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
   <exec_depend>python3-yaml</exec_depend>

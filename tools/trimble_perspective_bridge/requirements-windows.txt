@@ -1,0 +1,6 @@
+paramiko
+requests
+watchdog
+laspy
+lazrs
+numpy

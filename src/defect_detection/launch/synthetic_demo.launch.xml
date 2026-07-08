@@ -1,0 +1,63 @@
+<?xml version="1.0"?>
+<!--
+  End-to-end demo of the defect detection pipeline on synthetic data.
+  No hardware required: one synthetic node stands in for the OAK-D camera,
+  the YOLO detector, the robot base, and the Trimble X7. Every other node
+  is the real production node.
+
+    ros2 launch defect_detection synthetic_demo.launch.xml
+
+  Flow: synthetic camera + detections -> OAK depth fusion -> 3D detections
+  -> scan decision -> synthetic LAS scan -> scan watcher -> frame anchor
+  -> occupancy map -> frontier/infrastructure planners -> robot goal bridge
+  (dry run) -> simulated robot drives to the goal -> rescans.
+-->
+<launch>
+  <arg name="rviz" default="true"
+       description="Open RViz with the demo layout."/>
+  <arg name="demo_root" default="/tmp/synthetic_demo"
+       description="Scratch directory for scans, anchor, and defect store."/>
+
+  <node pkg="defect_detection"
+        exec="synthetic_field_node"
+        name="synthetic_field_node"
+        output="screen">
+    <param name="scan_directory" value="$(var demo_root)/trimble_scans"/>
+  </node>
+
+  <include file="$(find-pkg-share defect_detection)/launch/defect_detection.launch.xml">
+    <!-- Synthetic node replaces the camera and the YOLO detector. -->
+    <arg name="publish_camera" value="false"/>
+    <arg name="detector" value="false"/>
+
+    <!-- Real production nodes under test. -->
+    <arg name="oak_depth_navigation" value="true"/>
+    <arg name="visualization" value="true"/>
+    <arg name="scan_decision" value="true"/>
+    <arg name="trimble_scan_watcher" value="true"/>
+    <arg name="trimble_scan_directory" value="$(var demo_root)/trimble_scans"/>
+    <arg name="digital_twin_map" value="true"/>
+    <arg name="frontier_planner" value="true"/>
+    <arg name="frame_anchor" value="true"/>
+    <arg name="anchor_store_path" value="$(var demo_root)/anchor.yaml"/>
+    <arg name="infrastructure_planner" value="true"/>
+    <arg name="robot_goal_bridge" value="true"/>
+    <arg name="robot_goal_backend" value="dry_run"/>
+    <arg name="arrival_base_frame" value="base_link"/>
+    <arg name="defect_map" value="true"/>
+    <arg name="defect_map_store_path" value="$(var demo_root)/defects.yaml"/>
+
+    <!-- Demo pacing: rescan sooner than the field default. -->
+    <arg name="scan_cooldown_sec" value="45.0"/>
+
+    <!-- The demo ships its own RViz layout below. -->
+    <arg name="rviz" value="false"/>
+  </include>
+
+  <node if="$(var rviz)"
+        pkg="rviz2"
+        exec="rviz2"
+        name="rviz2"
+        args="-d $(find-pkg-share defect_detection)/config/synthetic_demo.rviz"
+        output="screen"/>
+</launch>

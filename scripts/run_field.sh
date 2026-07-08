@@ -1,26 +1,52 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODE="${1:-transport}"
-if [[ "${MODE}" != "transport" && "${MODE}" != "full" ]]; then
-  echo "Usage: $0 [transport|full]"
+usage() {
+  echo "Usage: $0 [transport|full] [--sim gazebo|synthetic]"
+  echo
+  echo "  transport|full   Deployment mode on the real robot (default: transport)."
+  echo "  --sim gazebo     Run the same pipeline against a Gazebo simulation."
+  echo "  --sim synthetic  Run against the pure-Python synthetic world (no GPU)."
+  echo
+  echo "Examples:"
+  echo "  $0 full                  # real robot, full pipeline"
+  echo "  $0 full --sim gazebo     # identical pipeline, simulated in Gazebo"
+  echo "  $0 --sim synthetic       # quick demo without Gazebo"
   exit 2
+}
+
+MODE="transport"
+SIM="none"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    transport|full) MODE="$1"; shift ;;
+    --sim) [[ $# -ge 2 ]] || usage; SIM="$2"; shift 2 ;;
+    --sim=*) SIM="${1#--sim=}"; shift ;;
+    -h|--help) usage ;;
+    *) echo "Unknown argument: $1"; usage ;;
+  esac
+done
+if [[ "${SIM}" != "none" && "${SIM}" != "gazebo" && "${SIM}" != "synthetic" ]]; then
+  echo "Invalid --sim value: ${SIM}"
+  usage
 fi
 
 WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export WORKSPACE_ROOT
 export FIELD_CONFIG="${FIELD_CONFIG:-${WORKSPACE_ROOT}/config/field.env}"
 
-if [[ ! -f "${FIELD_CONFIG}" ]]; then
+# Simulation runs without hardware and without credentials, so field.env
+# is optional there; on the real robot it is required.
+if [[ -f "${FIELD_CONFIG}" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "${FIELD_CONFIG}"
+  set +a
+elif [[ "${SIM}" == "none" ]]; then
   echo "Missing ${FIELD_CONFIG}"
   echo "Copy config/field.env.example to config/field.env and edit it."
   exit 1
 fi
-
-set -a
-# shellcheck disable=SC1090
-source "${FIELD_CONFIG}"
-set +a
 
 source /opt/ros/jazzy/setup.bash
 if [[ ! -f "${WORKSPACE_ROOT}/install/setup.bash" ]]; then
@@ -35,6 +61,32 @@ export YOLO_CONFIG_DIR="${YOLO_CONFIG_DIR:-${WORKSPACE_ROOT}/.runtime/ultralytic
 mkdir -p "${ROS_LOG_DIR}" "${YOLO_CONFIG_DIR}"
 
 cd "${WORKSPACE_ROOT}"
+
+if [[ "${SIM}" != "none" ]]; then
+  # Fresh sim state: stale anchors or defect stores would offset the twin.
+  DEMO_ROOT=/tmp/synthetic_demo
+  rm -rf "${DEMO_ROOT}"
+  mkdir -p "${DEMO_ROOT}/trimble_scans"
+
+  if [[ "${SIM}" == "gazebo" ]]; then
+    if ! command -v gz >/dev/null 2>&1 \
+        || ! ros2 pkg prefix ros_gz_bridge >/dev/null 2>&1; then
+      echo "Gazebo (gz-sim) or ros_gz is not installed. Install with:"
+      echo "  sudo apt install ros-jazzy-ros-gz"
+      exit 1
+    fi
+    echo "Simulation mode: Gazebo (world + robot + camera simulated)"
+    exec ros2 launch defect_detection gazebo_sim.launch.xml \
+      rviz:="${ENABLE_RVIZ:-true}" \
+      demo_root:="${DEMO_ROOT}"
+  fi
+
+  echo "Simulation mode: synthetic (pure Python, no Gazebo required)"
+  exec ros2 launch defect_detection synthetic_demo.launch.xml \
+    rviz:="${ENABLE_RVIZ:-true}" \
+    demo_root:="${DEMO_ROOT}"
+fi
+
 "${WORKSPACE_ROOT}/scripts/field_preflight.sh" "${MODE}"
 
 detector=false

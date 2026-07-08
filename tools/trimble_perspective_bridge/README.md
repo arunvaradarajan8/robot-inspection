@@ -1,9 +1,9 @@
 # Trimble Perspective Bridge App
 
-This is the companion control app pattern for the Jetson ROS pipeline. The
-checked-in implementation is a Windows/Tkinter app, but the same HTTP contract
-can be implemented on a Samsung/Android tablet when Trimble Perspective runs on
-the tablet.
+This is the Windows companion control app for the Jetson ROS pipeline. The
+Windows tablet or laptop runs Trimble Perspective and this Tkinter bridge app;
+the Jetson stays focused on ROS 2, OAK-D localization, AI detection, robot
+goals, and digital-twin processing.
 
 It provides:
 
@@ -23,12 +23,27 @@ It provides:
 - Wi-Fi-friendly LAS/LAZ reduction before transfer so full raw scans can stay
   on the Perspective/control host.
 
-## Run On Windows
+## Install On Windows Tablet Or Laptop
 
-Install Python 3.12, then run:
+1. Install Python 3.12 for Windows and enable `Add python.exe to PATH`.
+2. Copy this repository, or at least `tools\trimble_perspective_bridge`, onto
+   the Windows machine.
+3. Double-click:
+
+```text
+tools\trimble_perspective_bridge\Install Windows Dependencies.bat
+```
+
+Then launch the app with:
+
+```text
+tools\trimble_perspective_bridge\Launch Trimble Bridge.bat
+```
+
+You can also run it manually:
 
 ```powershell
-python tools\trimble_perspective_bridge\windows_app.py
+py tools\trimble_perspective_bridge\windows_app.py
 ```
 
 Configure:
@@ -63,43 +78,6 @@ If Trimble Perspective has no supported automation API, the app still works as
 the coordination layer: the Jetson requests a scan, the app shows/logs it,
 Perspective exports the scan, and the app automatically transfers the finished
 file to the Jetson.
-
-## Samsung Tablet Control Host
-
-If Trimble Perspective is running on a Samsung tablet, use the tablet as the
-control host and keep the Jetson focused on ROS/OAK/navigation. The current
-Windows Tkinter file will not run as-is on Android, so implement the same bridge
-as a small Termux Python web app.
-
-Install on the tablet:
-
-```bash
-pkg update
-pkg install python openssh git
-python -m pip install flask requests paramiko watchdog
-```
-
-The tablet bridge should provide the same endpoints:
-
-```text
-POST /scan_request
-POST /waypoint_arrived
-POST /jetson_ready
-GET /health
-```
-
-It should:
-
-- SSH or HTTP into the Jetson for Start/Stop.
-- Serve a local browser UI on the tablet.
-- Watch the Perspective export folder for `.las`, `.laz`, or `.e57` files.
-- Transfer the finished scan to the Jetson scan folder.
-- Download compact digital-twin artifacts back to the tablet on Stop.
-
-Android may not allow direct automation of Perspective's buttons. Prefer a
-supported Perspective export location or API if available; otherwise let the
-operator confirm/export scans in Perspective while the tablet bridge handles
-mission state and file transfer.
 
 ## Jetson URL
 

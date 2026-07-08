@@ -1,0 +1,97 @@
+<?xml version="1.0"?>
+<!--
+  Full pipeline demo in Gazebo (gz-sim / Harmonic). No hardware required.
+
+    ros2 launch defect_detection gazebo_sim.launch.xml
+
+  Gazebo simulates the robot, the OAK-D RGBD camera, and the inspection
+  site (world generated from the shared synthetic-world constants).
+  Ground-truth sim nodes stand in for YOLO and the Trimble X7; every other
+  node is the real production node, running on /clock sim time.
+
+  Requires: sudo apt install ros-jazzy-ros-gz
+-->
+<launch>
+  <arg name="rviz" default="true"
+       description="Open RViz with the demo layout."/>
+  <arg name="gui" default="true"
+       description="Run the Gazebo GUI; false runs the sim server headless."/>
+  <arg name="demo_root" default="/tmp/synthetic_demo"
+       description="Scratch directory for scans, anchor, and defect store."/>
+  <arg name="world"
+       default="$(find-pkg-share defect_detection)/worlds/inspection_site.sdf"/>
+
+  <!-- Gazebo stamps everything with sim time; every ROS node must follow. -->
+  <set_parameter name="use_sim_time" value="true"/>
+
+  <executable if="$(var gui)"
+              cmd="gz sim -r $(var world)"
+              output="screen"/>
+  <executable unless="$(var gui)"
+              cmd="gz sim -r -s --headless-rendering $(var world)"
+              output="screen"/>
+
+  <node pkg="ros_gz_bridge"
+        exec="parameter_bridge"
+        name="gazebo_bridge"
+        output="screen">
+    <param name="config_file"
+           value="$(find-pkg-share defect_detection)/config/gazebo_bridge.yaml"/>
+  </node>
+
+  <!-- Camera optical frame: matches the <gz_frame_id> of the RGBD sensor
+       and its mounting pose on the robot in the generated world. -->
+  <node pkg="tf2_ros"
+        exec="static_transform_publisher"
+        name="camera_optical_tf"
+        args="--x 0.25 --y 0 --z 0.65 --roll -1.5708 --pitch 0 --yaw -1.5708 --frame-id base_link --child-frame-id camera_optical_frame"
+        output="screen"/>
+
+  <!-- Sim stand-ins: YOLO, Trimble X7, and the robot's motion backend. -->
+  <node pkg="defect_detection"
+        exec="sim_detection_node"
+        name="sim_detection_node"
+        output="screen"/>
+
+  <node pkg="defect_detection"
+        exec="sim_scan_node"
+        name="sim_scan_node"
+        output="screen">
+    <param name="scan_directory" value="$(var demo_root)/trimble_scans"/>
+  </node>
+
+  <node pkg="defect_detection"
+        exec="goal_driver_node"
+        name="goal_driver_node"
+        output="screen"/>
+
+  <!-- The real production pipeline. -->
+  <include file="$(find-pkg-share defect_detection)/launch/defect_detection.launch.xml">
+    <arg name="publish_camera" value="false"/>
+    <arg name="detector" value="false"/>
+    <arg name="oak_depth_navigation" value="true"/>
+    <arg name="visualization" value="true"/>
+    <arg name="scan_decision" value="true"/>
+    <arg name="trimble_scan_watcher" value="true"/>
+    <arg name="trimble_scan_directory" value="$(var demo_root)/trimble_scans"/>
+    <arg name="digital_twin_map" value="true"/>
+    <arg name="frontier_planner" value="true"/>
+    <arg name="frame_anchor" value="true"/>
+    <arg name="anchor_store_path" value="$(var demo_root)/anchor.yaml"/>
+    <arg name="infrastructure_planner" value="true"/>
+    <arg name="robot_goal_bridge" value="true"/>
+    <arg name="robot_goal_backend" value="dry_run"/>
+    <arg name="arrival_base_frame" value="base_link"/>
+    <arg name="defect_map" value="true"/>
+    <arg name="defect_map_store_path" value="$(var demo_root)/defects.yaml"/>
+    <arg name="scan_cooldown_sec" value="45.0"/>
+    <arg name="rviz" value="false"/>
+  </include>
+
+  <node if="$(var rviz)"
+        pkg="rviz2"
+        exec="rviz2"
+        name="rviz2"
+        args="-d $(find-pkg-share defect_detection)/config/synthetic_demo.rviz"
+        output="screen"/>
+</launch>

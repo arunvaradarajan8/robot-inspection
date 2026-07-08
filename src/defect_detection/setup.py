@@ -22,6 +22,8 @@ setup(
             glob('config/*')),
         (os.path.join('share', package_name, 'models'),
             glob('models/*')),
+        (os.path.join('share', package_name, 'worlds'),
+            glob('worlds/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -68,6 +70,14 @@ setup(
             'defect_detection.digital_twin.oak_depth_fusion_node:main',
             'oak_localization_bridge = '
             'defect_detection.digital_twin.oak_localization_bridge:main',
+            'synthetic_field_node = '
+            'defect_detection.simulation.synthetic_field_node:main',
+            'sim_detection_node = '
+            'defect_detection.simulation.sim_detection_node:main',
+            'sim_scan_node = '
+            'defect_detection.simulation.sim_scan_node:main',
+            'goal_driver_node = '
+            'defect_detection.simulation.goal_driver_node:main',
         ],
     },
 )

@@ -34,7 +34,7 @@ Generic live or simulated point clouds can still be bridged:
 ```
 
 For the field robot, navigation perception is intended to use a Luxonis
-OAK-D Pro W class camera: IR illumination, wide FOV stereo, and OV9782 global
+OAK-D Pro W class camera: IR illumination, wide FOV stereo, and OV9282 global
 shutter stereo sensors. In that mode:
 
 ```text
@@ -71,6 +71,56 @@ but the high-level inspection localization source is OAK.
 For best results, configure the OAK odometry/VSLAM output so its child frame is
 the robot body frame, or provide a calibrated static transform from the OAK
 camera frame to `body`.
+
+## Simulation (No Hardware)
+
+The full pipeline runs end to end without any hardware. The same field
+script switches between the real robot and simulation — only the arguments
+change:
+
+```bash
+./scripts/run_field.sh full                  # real robot deployment
+./scripts/run_field.sh full --sim gazebo     # same pipeline, Gazebo sim
+./scripts/run_field.sh --sim synthetic       # pure-Python sim (no Gazebo)
+```
+
+Both simulation modes share one world definition
+(`defect_detection/simulation/world_constants.py`): a concrete wall with
+three defects (crack, spalling, exposed rebar), two pillars, and a ground
+plane. The Gazebo world SDF, the synthetic LAS scans, and the ground-truth
+detections are all generated from it, so they can never drift apart.
+
+**Gazebo mode** (`--sim gazebo`, requires `sudo apt install
+ros-jazzy-ros-gz`): Gazebo Harmonic simulates the robot, its RGBD camera,
+and the inspection site with physics and rendering. `ros_gz_bridge` maps
+the simulated camera and odometry onto the exact topics the field pipeline
+uses; ground-truth sim nodes stand in for YOLO and the Trimble X7, and a
+goal driver converts planner goals into `cmd_vel`. Everything runs on
+`/clock` sim time.
+
+**Synthetic mode** (`--sim synthetic`): one Python node renders the same
+world analytically (camera, depth, detections, robot, scanner) — no GPU or
+Gazebo needed. There is also a convenience wrapper that builds first:
+`./scripts/run_synthetic_demo.sh`.
+
+In both modes the real production nodes walk the full autonomy loop:
+
+```text
+camera + detections
+  -> OAK depth fusion (3D detections)
+  -> scan decision requests a Trimble scan
+  -> sim X7 writes a LAS file; the scan watcher publishes it
+  -> frame anchor locks the digital twin map frame
+  -> occupancy map -> frontier + infrastructure planners publish goals
+  -> robot goal bridge (dry run) -> robot drives to the goal
+  -> arrival verified over TF -> rescan
+```
+
+RViz shows the camera view, 3D defect markers, the Trimble scan cloud, the
+occupancy map, and the goal arrows as the loop runs. Sim state lives under
+`/tmp/synthetic_demo` and is wiped on each start. To edit the world, change
+`world_constants.py` and regenerate the Gazebo SDF with
+`python3 scripts/generate_gazebo_world.py`.
 
 ## Requirements
 
@@ -210,22 +260,34 @@ when the SDK trajectory command completes.
 
 ## Perspective Control Host
 
-The Trimble X7 side is coordinated by a Perspective control host. This can be a
-Windows laptop, or a Samsung/Android tablet if Trimble Perspective is running
-there. The Jetson stays responsible for ROS 2, OAK-D perception, AI detections,
-robot goals, and digital-twin processing.
+The Trimble X7 side is coordinated by a Windows Perspective control host. This
+can be a Windows tablet or Windows laptop running Trimble Perspective and the
+checked-in bridge app. The Jetson stays responsible for ROS 2, OAK-D
+perception, AI detections, robot goals, and digital-twin processing.
 
 ```text
-Samsung tablet or Windows laptop
+Windows tablet or Windows laptop
   -> Trimble Perspective controls the X7
   -> Perspective bridge app handles Start/Stop/status/scan-file transfer
   -> Jetson runs ROS 2, OAK-D, YOLO, planner, and digital twin
 ```
 
-The checked-in companion app currently targets Windows/Tkinter:
+Install Python 3.12 for Windows, then install the bridge dependencies:
+
+```text
+tools\trimble_perspective_bridge\Install Windows Dependencies.bat
+```
+
+Launch the Windows/Tkinter bridge:
 
 ```powershell
-python tools\trimble_perspective_bridge\windows_app.py
+py tools\trimble_perspective_bridge\windows_app.py
+```
+
+or double-click:
+
+```text
+tools\trimble_perspective_bridge\Launch Trimble Bridge.bat
 ```
 
 Press `Start` in the app to SSH into the Jetson, build the ROS workspace, launch
@@ -237,45 +299,6 @@ The app also listens for Jetson scan requests, optionally launches Perspective,
 watches the Perspective export folder, and prepares a Jetson-sized `.las` or
 `.laz` copy before transfer. Full-resolution raw scans stay on the Perspective
 host by default; this keeps Wi-Fi transfer practical.
-
-### Samsung Tablet Control Panel
-
-If Trimble Perspective runs on the Samsung tablet, the tablet can be the field
-control panel instead of the Windows laptop. The recommended tablet design is a
-small Python web app running under Termux:
-
-```text
-Tablet browser -> local Python control app -> Jetson SSH/HTTP
-                                      |
-                                      v
-                         Trimble Perspective export folder
-```
-
-On the tablet, install Termux, then:
-
-```bash
-pkg update
-pkg install python openssh git
-python -m pip install flask requests paramiko watchdog
-```
-
-The tablet app should expose the same HTTP endpoints used by the Jetson bridge:
-
-```text
-POST /scan_request
-POST /waypoint_arrived
-POST /jetson_ready
-GET /health
-GET /status
-```
-
-The tablet app should also watch the Perspective export folder for completed
-`.las`, `.laz`, or `.e57` files, reduce/copy the scan if needed, transfer it to
-the Jetson scan folder, and keep the tablet browser updated with mission state.
-Android may limit direct control of another app's buttons, so the reliable path
-is file/export-folder automation. If Perspective does not expose a supported
-API or predictable export folder, use the tablet app as the mission control
-panel and let the operator confirm/export scans in Perspective.
 
 Recommended Wi-Fi starting point:
 
