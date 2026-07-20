@@ -20,6 +20,11 @@ except ImportError:
     CvBridge = None
 
 
+def get_json(url, timeout_sec):
+    with urlrequest.urlopen(url, timeout=timeout_sec) as response:
+        return json.loads(response.read().decode('utf-8'))
+
+
 def post_json(url, payload, timeout_sec):
     data = json.dumps(payload).encode('utf-8')
     request = urlrequest.Request(
@@ -41,7 +46,6 @@ class TrimbleWindowsBridge(Node):
         self.declare_parameter('scan_required_topic', '/digital_twin/scan_required')
         self.declare_parameter('scan_reason_topic', '/digital_twin/scan_reason')
         self.declare_parameter('waypoint_arrived_topic', '/digital_twin/waypoint_arrived')
-        self.declare_parameter('frontier_goal_topic', '/digital_twin/frontier_goal')
         self.declare_parameter(
             'inspection_goal_topic',
             '/infrastructure/inspection_goal',
@@ -58,6 +62,16 @@ class TrimbleWindowsBridge(Node):
         self.declare_parameter('request_reference_scan_on_start', True)
         self.declare_parameter('http_timeout_sec', 3.0)
         self.declare_parameter('request_cooldown_sec', 10.0)
+        # The X7 writes its scans to its own SD card, so completion never
+        # arrives over ROS. Poll the Windows app instead and report it, or
+        # the planner would hold position until its scan timeout on every
+        # single station.
+        self.declare_parameter('scan_complete_topic', '/digital_twin/scan_complete')
+        self.declare_parameter('status_poll_period_sec', 2.0)
+        self.declare_parameter('scan_timeout_sec', 300.0)
+        # Closes the mission once the operator has filed the E57 that the
+        # Trimble held on its SD card for the whole run.
+        self.declare_parameter('upload_complete_topic', '/mission/upload_complete')
 
         self.windows_url = self.get_parameter(
             'windows_url'
@@ -70,9 +84,6 @@ class TrimbleWindowsBridge(Node):
         ).get_parameter_value().string_value
         waypoint_arrived_topic = self.get_parameter(
             'waypoint_arrived_topic'
-        ).get_parameter_value().string_value
-        frontier_goal_topic = self.get_parameter(
-            'frontier_goal_topic'
         ).get_parameter_value().string_value
         inspection_goal_topic = self.get_parameter(
             'inspection_goal_topic'
@@ -104,10 +115,27 @@ class TrimbleWindowsBridge(Node):
         self.request_cooldown = self.get_parameter(
             'request_cooldown_sec'
         ).get_parameter_value().double_value
+        scan_complete_topic = self.get_parameter(
+            'scan_complete_topic'
+        ).get_parameter_value().string_value
+        status_poll_period = self.get_parameter(
+            'status_poll_period_sec'
+        ).get_parameter_value().double_value
+        self.scan_timeout = self.get_parameter(
+            'scan_timeout_sec'
+        ).get_parameter_value().double_value
+        upload_complete_topic = self.get_parameter(
+            'upload_complete_topic'
+        ).get_parameter_value().string_value
+
+        self.scan_in_flight = False
+        self.scan_started = 0.0
+        self.scans_completed = None
+        self.upload_reported = False
 
         self.last_reason = ''
         self.last_scan_request_time = None
-        self.last_frontier_goal = None
+        self.last_goal = None
         self.last_detections = []
         self.last_camera_preview_time = 0.0
         self.reference_requested = False
@@ -117,6 +145,16 @@ class TrimbleWindowsBridge(Node):
         self.scan_request_publisher = self.create_publisher(
             Bool,
             scan_required_topic,
+            10,
+        )
+        self.scan_complete_publisher = self.create_publisher(
+            Bool,
+            scan_complete_topic,
+            10,
+        )
+        self.upload_complete_publisher = self.create_publisher(
+            Bool,
+            upload_complete_topic,
             10,
         )
 
@@ -136,12 +174,6 @@ class TrimbleWindowsBridge(Node):
             String,
             waypoint_arrived_topic,
             self.waypoint_arrived_callback,
-            10,
-        )
-        self.frontier_subscription = self.create_subscription(
-            PoseStamped,
-            frontier_goal_topic,
-            self.frontier_goal_callback,
             10,
         )
         self.inspection_goal_subscription = self.create_subscription(
@@ -169,6 +201,10 @@ class TrimbleWindowsBridge(Node):
             qos_profile_sensor_data,
         )
         self.timer = self.create_timer(1.0, self.startup_tick)
+        self.status_timer = self.create_timer(
+            max(0.5, status_poll_period),
+            self.poll_scan_status,
+        )
         self.get_logger().info(f'Windows Trimble bridge targeting {self.windows_url}')
         if self.camera_preview_enabled and self.cv_bridge is None:
             self.get_logger().warning(
@@ -214,24 +250,8 @@ class TrimbleWindowsBridge(Node):
             },
         )
 
-    def frontier_goal_callback(self, goal):
-        self.last_frontier_goal = {
-            'frame_id': goal.header.frame_id,
-            'x': goal.pose.position.x,
-            'y': goal.pose.position.y,
-            'z': goal.pose.position.z,
-        }
-        self.post_status(
-            'Navigating',
-            (
-                'Nav2 frontier goal: '
-                f'x={goal.pose.position.x:.2f}, '
-                f'y={goal.pose.position.y:.2f}'
-            ),
-        )
-
     def inspection_goal_callback(self, goal):
-        self.last_frontier_goal = {
+        self.last_goal = {
             'frame_id': goal.header.frame_id,
             'x': goal.pose.position.x,
             'y': goal.pose.position.y,
@@ -252,7 +272,7 @@ class TrimbleWindowsBridge(Node):
     def waypoint_arrived_callback(self, message):
         payload = {
             'reason': message.data,
-            'frontier_goal': self.last_frontier_goal,
+            'goal': self.last_goal,
         }
         self.post_status('Waypoint Arrived', message.data)
         self.open_scan_watcher_gate()
@@ -357,7 +377,58 @@ class TrimbleWindowsBridge(Node):
             self.get_logger().debug('Skipping duplicate Windows scan request')
             return
         self.last_scan_request_time = now
+        self.scan_in_flight = True
+        self.scan_started = now
         self.post('/scan_request', payload)
+
+    def poll_scan_status(self):
+        """Track scan completion and the end-of-mission E57 upload."""
+        if not self.scan_in_flight and self.upload_reported:
+            return
+
+        now = time.monotonic()
+        try:
+            status = get_json(self.windows_url + '/status', self.http_timeout)
+        except (OSError, urlerror.URLError, TimeoutError, ValueError) as error:
+            self.get_logger().warning(
+                f'Cannot read Windows bridge status: {error}',
+                throttle_duration_sec=15.0,
+            )
+            status = None
+
+        if status is not None:
+            if not self.upload_reported and status.get('uploaded_e57'):
+                self.upload_reported = True
+                self.upload_complete_publisher.publish(Bool(data=True))
+                self.get_logger().info(
+                    f'Operator uploaded the mission E57: '
+                    f'{status["uploaded_e57"]}'
+                )
+
+            completed = status.get('scans_completed')
+            if self.scans_completed is None:
+                self.scans_completed = completed
+            elif (
+                self.scan_in_flight
+                and completed is not None
+                and completed != self.scans_completed
+            ):
+                self.scans_completed = completed
+                self.publish_scan_complete('Trimble reported the scan finished')
+                return
+
+        if self.scan_in_flight and now - self.scan_started > self.scan_timeout:
+            self.publish_scan_complete(
+                f'no scan completion within {self.scan_timeout:.0f}s; '
+                'releasing the robot anyway'
+            )
+
+    def publish_scan_complete(self, reason):
+        self.scan_in_flight = False
+        message = Bool()
+        message.data = True
+        self.scan_complete_publisher.publish(message)
+        self.get_logger().info(f'Scan complete: {reason}')
 
     def post(self, path, payload):
         url = self.windows_url + path

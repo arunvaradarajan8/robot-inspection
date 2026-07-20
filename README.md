@@ -1,311 +1,203 @@
 # Infrastructure Defect Detection
 
-ROS 2 workspace for USB-camera defect detection, generic point-cloud fusion,
-Trimble X7 scan ingestion, digital-twin markers, infrastructure inspection
-planning, and optional robot navigation backends.
+ROS 2 workspace for autonomous infrastructure inspection on Boston Dynamics
+Spot: the robot explores a site on its own, walks up to defects it spots,
+triggers a Trimble X7 scan at every stop, and returns to where it started.
 
-## Pipeline
-
-```text
-USB camera -> /ros2_image -> YOLO -> /detections_2d
-                                      |
-                                      v
-                           scan_decision_node
-                                      |
-                                      v
-                         /digital_twin/scan_required
-
-Trimble X7 LAS/LAZ folder -> /trimble/x7/scan_points
-                                      |
-                                      v
-                /digital_twin/map + /digital_twin/defect_markers
-                                      |
-                                      v
-              frame anchor + infrastructure inspection goals
-                                      |
-                                      v
-                   dry-run, Nav2, or external Spot command bridge
-```
-
-Generic live or simulated point clouds can still be bridged:
+## The Pipeline
 
 ```text
-/lidar/raw -> pointcloud_bridge -> /lidar/points -> /detections_3d
+Spot EAP lidar  ──┐
+                  ├─► fused occupancy map ─► frontier goals ──┐
+depth camera    ──┘                                           │
+      │                                                       ▼
+      └─► YOLO ─► 3D defects ─► defect standoff goals ─► inspection goal
+                                     (preferred)              │
+                                                              ▼
+                                                    Spot SE2 walk command
+                                                    (EAP feeds Spot's own
+                                                     obstacle avoidance)
+                                                              │
+                                                              ▼
+                                              arrival verified over TF
+                                                              │
+                                                              ▼
+                                          app triggers an X7 scan; the robot
+                                          stands still until it finishes
+                                                              │
+                                                              ▼
+                                       mission ends ─► walk back to the start
+                                                    ─► wait for the E57 upload
 ```
 
-For the field robot, navigation perception is intended to use a Luxonis
-OAK-D Pro W class camera: IR illumination, wide FOV stereo, and OV9282 global
-shutter stereo sensors. In that mode:
+Three properties define this design:
 
-```text
-OAK RGB image -> YOLO -> /detections_2d
-OAK depth + camera_info + /detections_2d -> /detections_3d
-OAK visual odometry/VSLAM -> /oak/odom -> oak_odom -> body TF
-/detections_3d -> digital twin defect markers -> inspection/rescan goals
-```
+**The Trimble never closes the loop.** The X7 is triggered by the app and
+writes its scans to its own SD card. Nothing it produces feeds localization,
+mapping, or planning during the mission. The operator uploads the E57 at the
+end, once the robot is home.
 
-The OAK path is enabled with:
+**Both sensors build one map.** The EAP lidar gives long range and 360°
+coverage; the depth camera fills the lidar's near-field blind spot and catches
+low or thin obstacles. A cell is only unknown when *neither* sensor has seen
+it, so the frontier planner explores real terrain instead of blind spots.
 
-```text
-OAK_DEPTH_NAVIGATION=true
-OAK_LOCALIZATION=true
-IMAGE_TOPIC=/oak/rgb/image_raw
-OAK_DEPTH_TOPIC=/oak/rgb/depth
-OAK_CAMERA_INFO_TOPIC=/oak/rgb/camera_info
-OAK_ODOM_TOPIC=/oak/odom
-ROBOT_WORLD_FRAME=oak_odom
-NAVIGATION_BASE_FRAME=body
-```
+**Defects come first.** When YOLO has found something, the planner walks to a
+standoff distance from it so the X7 captures it closely. Only when there is
+nothing to revisit does it fall back to frontier exploration.
 
-The depth image must be aligned to the RGB image used by YOLO. Topic names
-depend on the `depthai_ros` launch file, so confirm them with `ros2 topic list`
-on the Jetson and update `config/field.env` if needed.
-
-Mission localization intentionally uses OAK odometry/VSLAM rather than Spot
-odom. The OAK localization bridge republishes `/oak/odom` as TF, normally
-`oak_odom -> body`. The first Trimble reference scan anchors the digital twin
-`map` frame to `oak_odom`, so the planner computes goals from OAK-estimated
-motion. Spot still uses its internal low-level balance/motor control to walk,
-but the high-level inspection localization source is OAK.
-
-For best results, configure the OAK odometry/VSLAM output so its child frame is
-the robot body frame, or provide a calibrated static transform from the OAK
-camera frame to `body`.
-
-## Simulation (No Hardware)
-
-The full pipeline runs end to end without any hardware. The same field
-script switches between the real robot and simulation — only the arguments
-change:
+Run it:
 
 ```bash
-./scripts/run_field.sh full                  # real robot deployment
-./scripts/run_field.sh full --sim gazebo     # same pipeline, Gazebo sim
-./scripts/run_field.sh --sim synthetic       # pure-Python sim (no Gazebo)
+cp config/field.env.example config/field.env   # set SPOT_IP + credentials
+./scripts/run_field.sh mission                 # real robot
+./scripts/run_field.sh mission --sim synthetic # same loop, no hardware
 ```
 
-Both simulation modes share one world definition
-(`defect_detection/simulation/world_constants.py`): a concrete wall with
-three defects (crack, spalling, exposed rebar), two pillars, and a ground
-plane. The Gazebo world SDF, the synthetic LAS scans, and the ground-truth
-detections are all generated from it, so they can never drift apart.
+Motion stays disabled until `ROBOT_GOAL_BRIDGE=true` and
+`ROBOT_GOAL_BACKEND=spot_sdk` are set in `config/field.env`; before that the
+stack proposes goals without moving hardware.
 
-**Gazebo mode** (`--sim gazebo`, requires `sudo apt install
-ros-jazzy-ros-gz`): Gazebo Harmonic simulates the robot, its RGBD camera,
-and the inspection site with physics and rendering. `ros_gz_bridge` maps
-the simulated camera and odometry onto the exact topics the field pipeline
-uses; ground-truth sim nodes stand in for YOLO and the Trimble X7, and a
-goal driver converts planner goals into `cmd_vel`. Everything runs on
-`/clock` sim time.
+## Hardware
 
-**Synthetic mode** (`--sim synthetic`): one Python node renders the same
-world analytically (camera, depth, detections, robot, scanner) — no GPU or
-Gazebo needed. There is also a convenience wrapper that builds first:
-`./scripts/run_synthetic_demo.sh`.
+**Spot + EAP (Enhanced Autonomy Payload).** The EAP does two jobs. Its lidar
+feeds Spot's own onboard obstacle avoidance while walking, and this stack also
+pulls that lidar cloud over the Boston Dynamics SDK
+(`bosdyn.client.point_cloud.PointCloudClient`) and publishes it as
+`/eap/points` for the occupancy map. Spot's world pose comes from the same SDK
+via `spot_localization_bridge`.
 
-In both modes the real production nodes walk the full autonomy loop:
+The mission runs in Spot's **vision** frame rather than `odom`. Vision is
+drift-corrected against Spot's own cameras, and the accuracy of the walk home
+after a long excursion follows directly from that choice. Set
+`SPOT_FRAME=odom` for the smoother but drifting alternative.
 
-```text
-camera + detections
-  -> OAK depth fusion (3D detections)
-  -> scan decision requests a Trimble scan
-  -> sim X7 writes a LAS file; the scan watcher publishes it
-  -> frame anchor locks the digital twin map frame
-  -> occupancy map -> frontier + infrastructure planners publish goals
-  -> robot goal bridge (dry run) -> robot drives to the goal
-  -> arrival verified over TF -> rescan
-```
+**Depth camera.** Any depth camera works; the defaults match a Luxonis OAK
+running `depthai_ros`. It supplies RGB for YOLO, aligned depth to turn 2D
+boxes into 3D defect positions, and a point cloud for the near field of the
+occupancy map. This workspace does not launch the camera driver — point
+`DEPTH_TOPIC`, `DEPTH_CAMERA_INFO_TOPIC`, and `MAP_DEPTH_POINTS_TOPIC` at
+whatever your driver publishes. If the driver only publishes a depth image,
+run `depth_image_proc` to produce the point cloud.
 
-RViz shows the camera view, 3D defect markers, the Trimble scan cloud, the
-occupancy map, and the goal arrows as the loop runs. Sim state lives under
-`/tmp/synthetic_demo` and is wiped on each start. To edit the world, change
-`world_constants.py` and regenerate the Gazebo SDF with
-`python3 scripts/generate_gazebo_world.py`.
+**Trimble X7.** Not controlled directly. Trimble Perspective runs it from a
+Windows tablet or laptop, and the checked-in bridge app exposes an HTTP API so
+the Jetson can request a scan and learn when it finished.
 
-## Requirements
+**Compute.** The Jetson runs ROS 2, perception, planning, and the Spot SDK
+clients. The Windows host runs Perspective and the bridge app.
 
-- ROS 2 Jazzy
-- Python 3.12
-- OpenCV and `cv_bridge`
-- Ultralytics for YOLO
-- DepthAI ROS publishing OAK RGB/depth/camera_info topics
-- `laspy` and `lazrs` for LAS/LAZ scan ingestion
+## Mission Lifecycle
 
-Install field Python dependencies:
+`mission_manager` owns the mission and is what makes the run finite:
+
+| State | What happens |
+|---|---|
+| `EXPLORING` | The planner picks goals; every arrival is recorded as a breadcrumb. |
+| `RETURNING` | Exploration is gated off and the recorded stations are replayed in reverse, ending at the start pose. |
+| `AWAITING_UPLOAD` | The robot is home. The mission stays open until the E57 is filed. |
+| `COMPLETE` | Mission summary written. |
+
+Exploration ends on whichever comes first: no frontier left, the station limit,
+the excursion limit (`MISSION_MAX_EXCURSION_M`, default 30 m), a duration cap,
+or an operator command on `/mission/return_home`. A mission summary — start
+pose, every station, timings — is written to `MISSION_SUMMARY_PATH`.
+
+The planner and the mission manager both publish to
+`/infrastructure/inspection_goal`, and `/mission/allow_exploration` guarantees
+only one of them is doing so at a time.
+
+## Scan Triggering
+
+`scan_decision_node` runs in `coverage` mode by default, meaning it requests a
+scan wherever the planner parked the robot — the planner already decided the
+stop was worth making. Scans are still paced by `SCAN_COOLDOWN_SEC` and
+`MIN_SCAN_SEPARATION_M`, so the robot must move meaningfully between stations.
+Set `SCAN_MODE=detection` to additionally require live high-confidence
+detections.
+
+While a scan runs the robot must stand still. Because nothing comes back from
+the X7 over ROS, the Windows bridge reports completion on
+`/digital_twin/scan_complete`, and that is what releases the planner. A
+`TRIMBLE_SCAN_TIMEOUT_SEC` safeguard releases it anyway if the report never
+arrives.
+
+## Simulation
 
 ```bash
-python3 -m pip install --user --break-system-packages -r requirements-field.txt
+./scripts/run_field.sh mission --sim synthetic  # pure Python, no GPU
+./scripts/run_field.sh mission --sim gazebo     # needs ros-jazzy-ros-gz
 ```
 
-Build:
+Both modes run the real production nodes and share one world definition
+(`defect_detection/simulation/world_constants.py`): a concrete wall with three
+defects, two pillars, and a ground plane. The Gazebo world SDF, the synthetic
+scans, and the ground-truth detections are all generated from it, so they
+cannot drift apart.
 
-```bash
-cd ~/ros2_ws
-source /opt/ros/jazzy/setup.bash
-colcon build --symlink-install
-source install/setup.bash
-```
-
-## Field Setup
-
-Create a machine-specific config:
-
-```bash
-cp config/field.env.example config/field.env
-```
-
-Edit camera, model, calibration, Nav2, and Trimble scan-folder settings. The X7
-workflow assumes scans are written as completed `.las` or `.laz` files into the
-configured folder.
-
-Run transport/digital-twin bringup:
-
-```bash
-./scripts/run_field.sh transport
-```
-
-Run full detection/fusion once the YOLO engine and calibration are ready:
-
-```bash
-./scripts/run_field.sh full
-```
-
-## Efficient X7 Scan Gate
-
-The scan decision node prevents wasting X7 scans when detections are absent,
-stale, or low confidence. It publishes:
-
-- `/digital_twin/scan_required` (`std_msgs/Bool`)
-- `/digital_twin/scan_reason` (`std_msgs/String`)
-
-Defaults:
-
-```text
-scan_confidence_threshold:=0.65
-scan_min_detections:=1
-scan_cooldown_sec:=60.0
-```
-
-The Trimble scan watcher defaults to `trimble_require_scan_request:=true`, so
-it only ingests the next completed scan after a high-confidence request.
-
-For the first station/reference scan, enable the Perspective bridge. It requests
-a reference scan on startup even when there are no detections:
-
-```bash
-ros2 launch pointcloud_bridge full_pipeline.launch.xml \
-  trimble_windows_bridge:=true \
-  trimble_windows_url:=http://PERSPECTIVE_HOST_IP:8765 \
-  trimble_reference_scan_on_start:=true
-```
-
-## Digital Twin And Robot Motion
-
-The X7 scan watcher publishes `/trimble/x7/scan_points`. The occupancy builder
-turns that into `/digital_twin/map`.
-
-The frame anchor node records the robot pose when the reference scan arrives and
-publishes the transform from the digital-twin `map` frame to the robot world
-frame. This is the coordinate glue that lets defect markers and scan stations be
-converted into robot-relative goals. It persists:
-
-- `/tmp/digital_twin_anchor.yaml`
-
-The defect map node persists AI markers to YAML and republishes them as:
-
-- `/digital_twin/defect_markers`
-- `/digital_twin/rescan_goals`
-
-The infrastructure planner prefers defect rescan goals first, then falls back to
-map-frontier exploration goals. It publishes:
-
-- `/infrastructure/inspection_goal`
-- `/infrastructure/planner_status`
-
-The robot goal bridge subscribes to `/infrastructure/inspection_goal`. It is off
-by default so the stack can propose goals without moving hardware. Enable one of
-these backends when the field command path is ready:
-
-```text
-ROBOT_GOAL_BRIDGE=true
-ROBOT_GOAL_BACKEND=dry_run  # no motion, publishes arrival for software tests
-ROBOT_GOAL_BACKEND=nav2     # send NavigateToPose goals
-ROBOT_GOAL_BACKEND=http     # POST goals to an external Spot SDK command service
-ROBOT_GOAL_BACKEND=spot_sdk # command Spot directly with the Boston Dynamics SDK
-```
-
-For Spot, the intended first hardware path is to use Spot-native localization and
-mobility for walking, while this ROS stack handles inspection goals, scan
-coordination, AI markers, and digital-twin updates.
-
-Direct Spot SDK control requires the Jetson to reach Spot on the mission LAN and
-the Boston Dynamics Python SDK to be installed from `requirements-field.txt`.
-Configure:
-
-```text
-ROBOT_GOAL_BRIDGE=true
-ROBOT_GOAL_BACKEND=spot_sdk
-SPOT_IP=192.168.80.3
-SPOT_USERNAME=...
-SPOT_PASSWORD=...
-SPOT_COMMAND_FRAME=odom
-SPOT_AUTO_POWER_ON=false
-SPOT_STAND_BEFORE_MOVE=true
-```
-
-Leave `SPOT_AUTO_POWER_ON=false` unless the tablet/operator workflow explicitly
-allows the payload to power motors. The backend acquires a lease, optionally
-commands stand, sends an SE2 trajectory goal, and publishes waypoint arrival
-when the SDK trajectory command completes.
+In sim the simulated world cloud stands in for the EAP lidar. The simulated
+X7 still writes a LAS file, and — exactly as in the field — nothing reads it
+back; it only stands in for the scanner's SD card. Sim state lives under
+`/tmp/synthetic_demo` and is wiped on each start.
 
 ## Perspective Control Host
 
-The Trimble X7 side is coordinated by a Windows Perspective control host. This
-can be a Windows tablet or Windows laptop running Trimble Perspective and the
-checked-in bridge app. The Jetson stays responsible for ROS 2, OAK-D
-perception, AI detections, robot goals, and digital-twin processing.
-
 ```text
-Windows tablet or Windows laptop
+Windows tablet or laptop
   -> Trimble Perspective controls the X7
-  -> Perspective bridge app handles Start/Stop/status/scan-file transfer
-  -> Jetson runs ROS 2, OAK-D, YOLO, planner, and digital twin
+  -> bridge app: Start/Stop, scan trigger, scan-finished, E57 upload
+  -> Jetson runs ROS 2, the depth camera, YOLO, planning, and the digital twin
 ```
 
-Install Python 3.12 for Windows, then install the bridge dependencies:
+Install Python 3.12 for Windows, then:
 
 ```text
 tools\trimble_perspective_bridge\Install Windows Dependencies.bat
-```
-
-Launch the Windows/Tkinter bridge:
-
-```powershell
 py tools\trimble_perspective_bridge\windows_app.py
 ```
 
-or double-click:
+`Start Mission` SSHes into the Jetson, builds the workspace, and launches the
+stack. `Scan Finished` marks a scan complete manually if Perspective's export
+folder is not being watched. `Upload E57 + Finish` files the scanner's E57 into
+`mission_output_dir` and closes the mission on the robot.
 
-```text
-tools\trimble_perspective_bridge\Launch Trimble Bridge.bat
+Scan file transfer to the Jetson is **off** by default (`auto_transfer`), since
+no scan feeds the live loop any more. Turn it on only to debug the legacy
+ingest path.
+
+## Requirements
+
+Full setup for both machines — Jetson and the Windows scanner host — is in
+**[docs/INSTALL.md](docs/INSTALL.md)**. Two things bite people there: the
+Jetson needs NVIDIA's PyTorch build rather than the PyPI one, and the TensorRT
+engine must be built on the Jetson itself.
+
+- ROS 2 Jazzy, Python 3.12
+- OpenCV and `cv_bridge`
+- Ultralytics for YOLO
+- A depth camera driver publishing RGB, aligned depth, and `camera_info`
+- `bosdyn-client` for Spot state, the EAP lidar, and motion commands
+- `laspy` / `lazrs` only for the legacy LAS ingest path and the simulator
+
+```bash
+python3 -m pip install --user --break-system-packages -r requirements-field.txt
+cd ~/ros2_ws && source /opt/ros/jazzy/setup.bash
+colcon build --symlink-install && source install/setup.bash
 ```
 
-Press `Start` in the app to SSH into the Jetson, build the ROS workspace, launch
-the autonomy/digital-twin stack, and wait for the Jetson to report ready. Press
-`Stop + Download Twin` to stop the Jetson ROS launch and copy configured
-digital-twin outputs back to the control host.
+## Legacy Paths
 
-The app also listens for Jetson scan requests, optionally launches Perspective,
-watches the Perspective export folder, and prepares a Jetson-sized `.las` or
-`.laz` copy before transfer. Full-resolution raw scans stay on the Perspective
-host by default; this keeps Wi-Fi transfer practical.
+These are kept in the repo but default **off** and are wired to nothing in the
+mission loop. They belong to the earlier design in which Trimble scans built
+the map:
 
-Recommended Wi-Fi starting point:
-
-```text
-Jetson max points: 500000
-Remote twin paths: /tmp/digital_twin_defects.yaml;/tmp/digital_twin_anchor.yaml
-```
+- `trimble_scan_watcher` — ingested LAS/LAZ from a watched folder
+- `frame_anchor_node` — anchored the twin's `map` frame to the robot world
+  frame. Unnecessary now: the map is built directly in Spot's world frame.
+- `tools/coverage_mission/` — a standalone non-ROS mission controller that
+  still implements the old X7-closes-the-loop design
+- `depth_localization_bridge` — depth-camera VIO as the localization source
+- `image_publisher` — USB webcam source, for bench work without a depth camera
 
 ## Tests
 

@@ -242,6 +242,7 @@ def dashboard_html():
           <button class="primary" onclick="post('/ui/start')">Start Mission</button>
           <button class="danger" onclick="post('/ui/stop')">Stop + Download Twin</button>
           <button class="secondary" onclick="post('/scan_request', {scan_type:'manual', reason:'dashboard manual scan'})">Request Scan</button>
+          <button class="secondary" onclick="post('/scan_finished', {reason:'dashboard marked scan finished'})">Scan Finished</button>
         </div>
       </section>
       <section class="card">
@@ -325,6 +326,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self.server.app.enqueue_scan_request(body)
             self.send_json(202, {'accepted': True})
             return
+        if self.path == '/scan_finished':
+            self.server.app.events.put(('scan_finished', body or {}))
+            return self.send_json(200, {'ok': True})
         if self.path == '/waypoint_arrived':
             self.server.app.enqueue_waypoint_arrival(body)
             self.send_json(202, {'accepted': True})
@@ -402,9 +406,14 @@ class TrimblePerspectiveBridgeApp:
         'jetson_max_points': 500000,
         'jetson_scan_dir': r'\\JETSON\trimble_scans',
         'stable_age_sec': 5.0,
-        'auto_transfer': True,
-        'transfer_reduced_scan': True,
+        # Scans stay on the Trimble during the mission; nothing is sent to
+        # the Jetson, because no scan feeds localization or planning any
+        # more. Turn these on only for offline debugging of the old path.
+        'auto_transfer': False,
+        'transfer_reduced_scan': False,
         'auto_scan_on_waypoint': True,
+        # Where the operator's end-of-mission E57 export is filed.
+        'mission_output_dir': str(Path.home() / 'Documents' / 'MissionOutput'),
         'logo_path': '',
         'open_browser_on_start': True,
     }
@@ -417,6 +426,13 @@ class TrimblePerspectiveBridgeApp:
         self.last_transferred = None
         self.pending_scan = False
         self.last_scan_request = None
+        # The robot stands still until it hears a scan finished, so this
+        # counter is what releases it. It advances when a new export shows
+        # up in Perspective's folder, or when the operator says so.
+        self.scans_completed = 0
+        self.scan_state = 'idle'
+        self.uploaded_e57 = None
+        self.last_seen_scan = None
         self.jetson_process = None
         self.jetson_ready = False
         self.process_state = 'Idle'
@@ -604,8 +620,14 @@ class TrimblePerspectiveBridgeApp:
         ).pack(side='left', padx=8)
         ttk.Button(
             actions,
-            text='Transfer Latest Scan',
-            command=self.transfer_latest_scan,
+            text='Scan Finished',
+            command=self.scan_finished_button,
+            style='Tool.TButton',
+        ).pack(side='left', padx=8)
+        ttk.Button(
+            actions,
+            text='Upload E57 + Finish',
+            command=self.upload_e57,
             style='Tool.TButton',
         ).pack(side='left', padx=8)
         ttk.Button(
@@ -836,14 +858,23 @@ class TrimblePerspectiveBridgeApp:
             webbrowser.open(f'http://127.0.0.1:{port}/')
 
     def watch_exports(self):
+        """Watch Perspective's folder to learn when a scan has finished.
+
+        The scan file itself stays put: seeing it appear is only used as
+        the completion signal that releases the robot. Transfer is opt-in
+        and off by default.
+        """
         while not self.stop_event.is_set():
             try:
-                if self.config.get('auto_transfer', True):
-                    scan = newest_scan(Path(self.config['export_dir']))
-                    if scan and scan != self.last_transferred:
-                        if file_is_stable(scan, float(self.config['stable_age_sec'])):
+                scan = newest_scan(Path(self.config['export_dir']))
+                if scan and scan != self.last_seen_scan:
+                    if file_is_stable(scan, float(self.config['stable_age_sec'])):
+                        self.last_seen_scan = scan
+                        self.events.put(
+                            ('scan_finished', {'reason': f'new export {scan.name}'})
+                        )
+                        if self.config.get('auto_transfer', False):
                             self.transfer_scan(scan)
-                            self.pending_scan = False
                 time.sleep(2.0)
             except Exception as error:
                 self.events.put(('log', f'Watcher error: {error}'))
@@ -888,6 +919,8 @@ class TrimblePerspectiveBridgeApp:
                 self.handle_process_status(payload)
             elif event == 'camera_frame':
                 self.handle_camera_frame(payload)
+            elif event == 'scan_finished':
+                self.handle_scan_finished(payload)
             elif event == 'ui_start':
                 self.start_system()
             elif event == 'ui_stop':
@@ -916,12 +949,28 @@ class TrimblePerspectiveBridgeApp:
 
     def handle_scan_request(self, payload):
         self.pending_scan = True
+        self.scan_state = 'scanning'
         self.last_scan_request = payload
         reason = payload.get('reason') or payload.get('scan_type') or 'scan requested'
         self.trimble_status_var.set('Scan requested')
         self.set_state('Scanning', reason)
         self.log(f'Scan requested: {reason}')
         self.request_scan()
+
+    def handle_scan_finished(self, payload):
+        """Release the robot, which is standing still waiting for this."""
+        if self.scan_state != 'scanning':
+            return
+        self.scans_completed += 1
+        self.scan_state = 'idle'
+        self.pending_scan = False
+        reason = payload.get('reason', 'scan finished')
+        self.trimble_status_var.set(f'{self.scans_completed} scan(s) complete')
+        self.set_state('Scan Complete', reason)
+        self.log(f'Scan complete ({self.scans_completed}): {reason}')
+
+    def scan_finished_button(self):
+        self.handle_scan_finished({'reason': 'operator marked the scan finished'})
 
     def handle_camera_frame(self, payload):
         self.latest_camera_payload = payload
@@ -1218,10 +1267,46 @@ class TrimblePerspectiveBridgeApp:
             self.log(f'Could not reduce {scan.name}: {error}')
             return None
 
+    def upload_e57(self):
+        """File the operator's end-of-mission E57 and close the mission.
+
+        The E57 lives on the Trimble's SD card for the whole run. This is
+        purely a hand-off: the file is copied next to the mission outputs
+        and the Jetson is told the mission can close. No analysis happens
+        here.
+        """
+        path = filedialog.askopenfilename(
+            title='Select the mission E57 exported from the Trimble',
+            filetypes=[('E57 point cloud', '*.e57'), ('All files', '*.*')],
+        )
+        if not path:
+            return
+
+        source = Path(path)
+        target_dir = Path(self.config['mission_output_dir']).expanduser()
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target = target_dir / (
+                f'{time.strftime("%Y%m%d_%H%M%S")}_{source.name}'
+            )
+            shutil.copy2(source, target)
+        except OSError as error:
+            messagebox.showerror('Upload Error', str(error))
+            self.log(f'E57 upload failed: {error}')
+            return
+
+        self.uploaded_e57 = str(target)
+        self.upload_status_var.set(f'Uploaded {target.name}')
+        self.set_state('Mission Complete', f'E57 filed at {target}')
+        self.log(f'E57 uploaded to {target}')
+
     def status_payload(self):
         return {
             'ok': True,
             'pending_scan': self.pending_scan,
+            'scan_state': self.scan_state,
+            'scans_completed': self.scans_completed,
+            'uploaded_e57': self.uploaded_e57,
             'last_transferred': (
                 str(self.last_transferred) if self.last_transferred else None
             ),

@@ -2,24 +2,31 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 [transport|full] [--sim gazebo|synthetic]"
+  echo "Usage: $0 [mission|transport|full] [--sim gazebo|synthetic]"
   echo
-  echo "  transport|full   Deployment mode on the real robot (default: transport)."
+  echo "  mission          The field pipeline: Spot EAP lidar and the depth"
+  echo "                   camera build the map, the planner visits defects"
+  echo "                   first and frontiers otherwise, the Trimble X7 is"
+  echo "                   triggered at each stop, and the robot walks back"
+  echo "                   to its start pose before waiting for the E57."
+  echo "  transport|full   Reduced bringup for bench work on the real robot."
   echo "  --sim gazebo     Run the same pipeline against a Gazebo simulation."
   echo "  --sim synthetic  Run against the pure-Python synthetic world (no GPU)."
   echo
   echo "Examples:"
-  echo "  $0 full                  # real robot, full pipeline"
-  echo "  $0 full --sim gazebo     # identical pipeline, simulated in Gazebo"
-  echo "  $0 --sim synthetic       # quick demo without Gazebo"
+  echo "  $0 mission                   # the field pipeline on the real robot"
+  echo "  $0 mission --sim synthetic   # same loop, no hardware"
+  echo "  $0 mission --sim gazebo      # same loop, simulated in Gazebo"
   exit 2
 }
 
-MODE="transport"
+MODE="mission"
 SIM="none"
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    transport|full) MODE="$1"; shift ;;
+    transport|full|mission) MODE="$1"; shift ;;
+    # The old name for what is now the only field pipeline.
+    coverage) MODE="mission"; shift ;;
     --sim) [[ $# -ge 2 ]] || usage; SIM="$2"; shift 2 ;;
     --sim=*) SIM="${1#--sim=}"; shift ;;
     -h|--help) usage ;;
@@ -62,6 +69,21 @@ mkdir -p "${ROS_LOG_DIR}" "${YOLO_CONFIG_DIR}"
 
 cd "${WORKSPACE_ROOT}"
 
+# Mission mode: defects first, frontiers as the fallback, a scan at every
+# stop, one accumulated map fused from both sensors, and a managed return
+# to the start pose at the end.
+MISSION_ARGS=()
+if [[ "${MODE}" == "mission" ]]; then
+  MISSION_ARGS+=(
+    scan_mode:=coverage
+    prefer_defect_rescans:=true
+    planner_hold_for_scan:=true
+    digital_twin_accumulate:=true
+    digital_twin_use_tf_scan_origin:=true
+    mission_manager:=true
+  )
+fi
+
 if [[ "${SIM}" != "none" ]]; then
   # Fresh sim state: stale anchors or defect stores would offset the twin.
   DEMO_ROOT=/tmp/synthetic_demo
@@ -78,24 +100,48 @@ if [[ "${SIM}" != "none" ]]; then
     echo "Simulation mode: Gazebo (world + robot + camera simulated)"
     exec ros2 launch defect_detection gazebo_sim.launch.xml \
       rviz:="${ENABLE_RVIZ:-true}" \
-      demo_root:="${DEMO_ROOT}"
+      demo_root:="${DEMO_ROOT}" \
+      "${MISSION_ARGS[@]}"
   fi
 
   echo "Simulation mode: synthetic (pure Python, no Gazebo required)"
   exec ros2 launch defect_detection synthetic_demo.launch.xml \
     rviz:="${ENABLE_RVIZ:-true}" \
-    demo_root:="${DEMO_ROOT}"
+    demo_root:="${DEMO_ROOT}" \
+    "${MISSION_ARGS[@]}"
 fi
 
 "${WORKSPACE_ROOT}/scripts/field_preflight.sh" "${MODE}"
 
 detector=false
-fusion="${FUSION:-false}"
+depth_navigation="${DEPTH_NAVIGATION:-false}"
+depth_localization="${DEPTH_LOCALIZATION:-false}"
+scan_mode="${SCAN_MODE:-coverage}"
+prefer_defect_rescans="${PREFER_DEFECT_RESCANS:-true}"
+planner_hold_for_scan="${PLANNER_HOLD_FOR_SCAN:-true}"
+accumulate="${DIGITAL_TWIN_ACCUMULATE:-true}"
+use_tf_scan_origin="${DIGITAL_TWIN_USE_TF_SCAN_ORIGIN:-true}"
+spot_localization="${SPOT_LOCALIZATION:-false}"
+eap_lidar="${EAP_LIDAR:-false}"
+mission_manager="${MISSION_MANAGER:-false}"
+map_depth_enabled="${MAP_DEPTH_ENABLED:-false}"
+robot_world_frame="${ROBOT_WORLD_FRAME:-vision}"
+defect_map="${DEFECT_MAP:-true}"
 if [[ "${MODE}" == "full" ]]; then
   detector=true
-  if [[ "${OAK_DEPTH_NAVIGATION:-false}" != "true" ]]; then
-    fusion=true
-  fi
+elif [[ "${MODE}" == "mission" ]]; then
+  # The field pipeline. Spot's vision frame localizes the mission, the
+  # EAP lidar and the depth camera fuse into one occupancy map, YOLO
+  # finds defects worth a closer Trimble scan, and the mission manager
+  # walks the robot home when there is nothing left to visit.
+  detector=true
+  depth_navigation="${DEPTH_NAVIGATION:-true}"
+  depth_localization=false
+  spot_localization="${SPOT_LOCALIZATION:-true}"
+  eap_lidar="${EAP_LIDAR:-true}"
+  mission_manager="${MISSION_MANAGER:-true}"
+  map_depth_enabled="${MAP_DEPTH_ENABLED:-true}"
+  defect_map="${DEFECT_MAP:-true}"
 fi
 
 exec ros2 launch pointcloud_bridge full_pipeline.launch.xml \
@@ -110,27 +156,22 @@ exec ros2 launch pointcloud_bridge full_pipeline.launch.xml \
   image_topic:="${IMAGE_TOPIC:-/ros2_image}" \
   detections_2d_topic:="${DETECTIONS_2D_TOPIC:-/detections_2d}" \
   detections_3d_topic:="${DETECTIONS_3D_TOPIC:-/detections_3d}" \
-  calibration_path:="${CALIBRATION_PATH:-}" \
   detector:="${detector}" \
-  fusion:="${fusion}" \
-  oak_depth_navigation:="${OAK_DEPTH_NAVIGATION:-false}" \
-  oak_depth_topic:="${OAK_DEPTH_TOPIC:-/oak/rgb/depth}" \
-  oak_camera_info_topic:="${OAK_CAMERA_INFO_TOPIC:-/oak/rgb/camera_info}" \
-  oak_depth_minimum_confidence:="${OAK_DEPTH_MINIMUM_CONFIDENCE:-0.50}" \
-  oak_depth_bbox_padding_px:="${OAK_DEPTH_BBOX_PADDING_PX:-4}" \
-  oak_depth_default_bbox_size_m:="${OAK_DEPTH_DEFAULT_BBOX_SIZE_M:-0.20}" \
-  oak_localization:="${OAK_LOCALIZATION:-false}" \
-  oak_odom_topic:="${OAK_ODOM_TOPIC:-/oak/odom}" \
-  oak_odom_frame:="${OAK_ODOM_FRAME:-oak_odom}" \
-  oak_odom_base_frame:="${OAK_ODOM_BASE_FRAME:-base_link}" \
-  oak_odom_use_message_frame_ids:="${OAK_ODOM_USE_MESSAGE_FRAME_IDS:-true}" \
+  depth_navigation:="${depth_navigation}" \
+  depth_topic:="${DEPTH_TOPIC:-/oak/rgb/depth}" \
+  depth_camera_info_topic:="${DEPTH_CAMERA_INFO_TOPIC:-/oak/rgb/camera_info}" \
+  depth_minimum_confidence:="${DEPTH_MINIMUM_CONFIDENCE:-0.50}" \
+  depth_bbox_padding_px:="${DEPTH_BBOX_PADDING_PX:-4}" \
+  depth_default_bbox_size_m:="${DEPTH_DEFAULT_BBOX_SIZE_M:-0.20}" \
+  depth_localization:="${depth_localization}" \
+  depth_odom_topic:="${DEPTH_ODOM_TOPIC:-/oak/odom}" \
+  depth_odom_frame:="${DEPTH_ODOM_FRAME:-depth_odom}" \
+  depth_odom_base_frame:="${DEPTH_ODOM_BASE_FRAME:-body}" \
+  depth_odom_use_message_frame_ids:="${DEPTH_ODOM_USE_MESSAGE_FRAME_IDS:-true}" \
   visualization:=true \
   rviz:="${ENABLE_RVIZ:-true}" \
-  autonomous_navigation:="${AUTONOMOUS_NAVIGATION:-false}" \
-  autonomous_navigation_enabled:="${AUTONOMOUS_NAVIGATION_ENABLED:-false}" \
   navigation_base_frame:="${NAVIGATION_BASE_FRAME:-body}" \
-  navigation_priority_config:="${NAVIGATION_PRIORITY_CONFIG:-}" \
-  trimble_scan_watcher:="${TRIMBLE_SCAN_WATCHER:-true}" \
+  trimble_scan_watcher:="${TRIMBLE_SCAN_WATCHER:-false}" \
   trimble_scan_directory:="${TRIMBLE_SCAN_DIRECTORY:-/tmp/trimble_scans}" \
   trimble_scan_topic:="${TRIMBLE_SCAN_TOPIC:-/trimble/x7/scan_points}" \
   trimble_scan_frame:="${TRIMBLE_SCAN_FRAME:-map}" \
@@ -138,17 +179,45 @@ exec ros2 launch pointcloud_bridge full_pipeline.launch.xml \
   trimble_windows_url:="${TRIMBLE_WINDOWS_URL:-http://127.0.0.1:8765}" \
   trimble_reference_scan_on_start:="${TRIMBLE_REFERENCE_SCAN_ON_START:-true}" \
   scan_decision:="${SCAN_DECISION:-true}" \
+  scan_mode:="${scan_mode}" \
   scan_confidence_threshold:="${SCAN_CONFIDENCE_THRESHOLD:-0.65}" \
   scan_min_detections:="${SCAN_MIN_DETECTIONS:-1}" \
   scan_cooldown_sec:="${SCAN_COOLDOWN_SEC:-60.0}" \
+  min_scan_separation_m:="${MIN_SCAN_SEPARATION_M:-10.0}" \
   digital_twin_map:="${DIGITAL_TWIN_MAP:-true}" \
-  frontier_planner:="${FRONTIER_PLANNER:-true}" \
-  frame_anchor:="${FRAME_ANCHOR:-true}" \
-  robot_world_frame:="${ROBOT_WORLD_FRAME:-oak_odom}" \
+  digital_twin_accumulate:="${accumulate}" \
+  digital_twin_use_tf_scan_origin:="${use_tf_scan_origin}" \
+  map_eap_enabled:="${MAP_EAP_ENABLED:-true}" \
+  map_eap_topic:="${MAP_EAP_TOPIC:-/eap/points}" \
+  map_eap_max_range_m:="${MAP_EAP_MAX_RANGE_M:-40.0}" \
+  map_eap_sensor_frame:="${MAP_EAP_SENSOR_FRAME:-}" \
+  map_depth_enabled:="${map_depth_enabled}" \
+  map_depth_points_topic:="${MAP_DEPTH_POINTS_TOPIC:-/depth/points}" \
+  map_depth_max_range_m:="${MAP_DEPTH_MAX_RANGE_M:-5.0}" \
+  map_depth_sensor_frame:="${MAP_DEPTH_SENSOR_FRAME:-}" \
+  frame_anchor:="${FRAME_ANCHOR:-false}" \
+  robot_world_frame:="${robot_world_frame}" \
   anchor_store_path:="${ANCHOR_STORE_PATH:-/tmp/digital_twin_anchor.yaml}" \
   auto_anchor_on_first_scan:="${AUTO_ANCHOR_ON_FIRST_SCAN:-true}" \
   infrastructure_planner:="${INFRASTRUCTURE_PLANNER:-true}" \
   infrastructure_goal_cooldown_sec:="${INFRASTRUCTURE_GOAL_COOLDOWN_SEC:-20.0}" \
+  prefer_defect_rescans:="${prefer_defect_rescans}" \
+  planner_hold_for_scan:="${planner_hold_for_scan}" \
+  planner_scan_wait_timeout_sec:="${PLANNER_SCAN_WAIT_TIMEOUT_SEC:-300.0}" \
+  spot_localization:="${spot_localization}" \
+  spot_frame:="${SPOT_FRAME:-vision}" \
+  spot_odom_topic:="${SPOT_ODOM_TOPIC:-/spot/odom}" \
+  eap_lidar:="${eap_lidar}" \
+  eap_lidar_topic:="${EAP_LIDAR_TOPIC:-/eap/points}" \
+  eap_point_cloud_service:="${EAP_POINT_CLOUD_SERVICE:-velodyne-point-cloud}" \
+  eap_point_cloud_source:="${EAP_POINT_CLOUD_SOURCE:-velodyne-point-cloud}" \
+  mission_manager:="${mission_manager}" \
+  mission_summary_path:="${MISSION_SUMMARY_PATH:-/tmp/mission_summary.yaml}" \
+  mission_max_stations:="${MISSION_MAX_STATIONS:-0}" \
+  mission_max_excursion_m:="${MISSION_MAX_EXCURSION_M:-30.0}" \
+  mission_duration_sec:="${MISSION_DURATION_SEC:-0.0}" \
+  mission_home_position_tolerance_m:="${MISSION_HOME_POSITION_TOLERANCE_M:-1.0}" \
+  trimble_scan_timeout_sec:="${TRIMBLE_SCAN_TIMEOUT_SEC:-300.0}" \
   robot_goal_bridge:="${ROBOT_GOAL_BRIDGE:-false}" \
   robot_goal_backend:="${ROBOT_GOAL_BACKEND:-dry_run}" \
   spot_command_url:="${SPOT_COMMAND_URL:-}" \
@@ -165,6 +234,4 @@ exec ros2 launch pointcloud_bridge full_pipeline.launch.xml \
   arrival_position_tolerance_m:="${ARRIVAL_POSITION_TOLERANCE_M:-0.35}" \
   arrival_yaw_tolerance_rad:="${ARRIVAL_YAW_TOLERANCE_RAD:-0.45}" \
   arrival_stable_sec:="${ARRIVAL_STABLE_SEC:-1.5}" \
-  defect_map:="${DEFECT_MAP:-true}" \
-  pointcloud_monitor:=false \
-  image_monitor:=false
+  defect_map:="${defect_map}"

@@ -7,8 +7,6 @@
   <arg name="camera_frame_rate" default="30.0"/>
   <arg name="camera_reconnect_interval_sec" default="2.0"/>
   <arg name="publish_camera" default="true"/>
-  <arg name="image_monitor" default="false"/>
-  <arg name="pointcloud_monitor" default="true"/>
   <arg name="publish_extrinsics" default="false"/>
   <arg name="timestamp_mode" default="source"/>
   <arg name="max_cloud_age_sec" default="0.5"/>
@@ -22,20 +20,17 @@
   <arg name="detections_2d_topic" default="/detections_2d"/>
   <arg name="pointcloud_topic" default="/lidar/points"/>
   <arg name="detections_3d_topic" default="/detections_3d"/>
-  <arg name="fusion" default="false"/>
-  <arg name="calibration_path"
-       default="$(find-pkg-share defect_detection)/config/site_calibration.yaml"/>
-  <arg name="oak_depth_navigation" default="true"/>
-  <arg name="oak_depth_topic" default="/oak/rgb/depth"/>
-  <arg name="oak_camera_info_topic" default="/oak/rgb/camera_info"/>
-  <arg name="oak_depth_minimum_confidence" default="0.50"/>
-  <arg name="oak_depth_bbox_padding_px" default="4"/>
-  <arg name="oak_depth_default_bbox_size_m" default="0.20"/>
-  <arg name="oak_localization" default="true"/>
-  <arg name="oak_odom_topic" default="/oak/odom"/>
-  <arg name="oak_odom_frame" default="oak_odom"/>
-  <arg name="oak_odom_base_frame" default="body"/>
-  <arg name="oak_odom_use_message_frame_ids" default="false"/>
+  <arg name="depth_navigation" default="false"/>
+  <arg name="depth_topic" default="/oak/rgb/depth"/>
+  <arg name="depth_camera_info_topic" default="/oak/rgb/camera_info"/>
+  <arg name="depth_minimum_confidence" default="0.50"/>
+  <arg name="depth_bbox_padding_px" default="4"/>
+  <arg name="depth_default_bbox_size_m" default="0.20"/>
+  <arg name="depth_localization" default="false"/>
+  <arg name="depth_odom_topic" default="/oak/odom"/>
+  <arg name="depth_odom_frame" default="depth_odom"/>
+  <arg name="depth_odom_base_frame" default="body"/>
+  <arg name="depth_odom_use_message_frame_ids" default="false"/>
   <arg name="visualization" default="true"/>
   <arg name="rviz" default="false"/>
   <arg name="visualization_pointcloud_topic" default="/rviz/pointcloud"/>
@@ -43,14 +38,9 @@
   <arg name="box_alpha" default="0.30"/>
   <arg name="label_height" default="0.15"/>
   <arg name="marker_lifetime_sec" default="0.50"/>
-  <arg name="autonomous_navigation" default="false"/>
-  <arg name="autonomous_navigation_enabled" default="false"/>
   <arg name="navigation_target_frame" default="map"/>
   <arg name="navigation_base_frame" default="body"/>
   <arg name="navigation_standoff_distance" default="1.50"/>
-  <arg name="navigation_minimum_confidence" default="0.50"/>
-  <arg name="navigation_priority_config"
-       default="$(find-pkg-share defect_detection)/config/navigation_priorities.yaml"/>
   <arg name="sync_queue_size" default="30"/>
   <arg name="sync_slop_sec" default="0.10"/>
   <arg name="trimble_scan_watcher" default="false"/>
@@ -60,22 +50,36 @@
   <arg name="trimble_scan_max_points" default="500000"/>
   <arg name="trimble_require_scan_request" default="true"/>
   <arg name="scan_decision" default="false"/>
+  <arg name="scan_mode" default="coverage"/>
+  <arg name="scan_request_initial" default="true"/>
   <arg name="scan_required_topic" default="/digital_twin/scan_required"/>
   <arg name="scan_reason_topic" default="/digital_twin/scan_reason"/>
   <arg name="scan_confidence_threshold" default="0.65"/>
   <arg name="scan_min_detections" default="1"/>
   <arg name="scan_cooldown_sec" default="60.0"/>
+  <arg name="min_scan_separation_m" default="10.0"/>
   <arg name="digital_twin_map" default="false"/>
   <arg name="digital_twin_map_topic" default="/digital_twin/map"/>
   <arg name="digital_twin_map_resolution" default="0.10"/>
   <arg name="digital_twin_scan_origin_x" default="0.0"/>
   <arg name="digital_twin_scan_origin_y" default="0.0"/>
-  <arg name="frontier_planner" default="false"/>
-  <arg name="frontier_goal_topic" default="/digital_twin/frontier_goal"/>
+  <arg name="digital_twin_accumulate" default="true"/>
+  <arg name="digital_twin_use_tf_scan_origin" default="true"/>
+  <arg name="map_eap_enabled" default="true"/>
+  <arg name="map_eap_topic" default="/eap/points"/>
+  <arg name="map_eap_max_range_m" default="40.0"/>
+  <arg name="map_eap_max_points_per_update" default="40000"/>
+  <arg name="map_eap_sensor_frame" default=""/>
+  <arg name="map_eap_update_period_sec" default="0.5"/>
+  <arg name="map_depth_enabled" default="true"/>
+  <arg name="map_depth_points_topic" default="/depth/points"/>
+  <arg name="map_depth_max_range_m" default="5.0"/>
+  <arg name="map_depth_max_points_per_update" default="20000"/>
+  <arg name="map_depth_sensor_frame" default=""/>
+  <arg name="map_depth_update_period_sec" default="0.5"/>
   <arg name="waypoint_arrived_topic" default="/digital_twin/waypoint_arrived"/>
-  <arg name="frontier_send_nav2_goals" default="false"/>
-  <arg name="frame_anchor" default="true"/>
-  <arg name="robot_world_frame" default="oak_odom"/>
+  <arg name="frame_anchor" default="false"/>
+  <arg name="robot_world_frame" default="vision"/>
   <arg name="anchor_request_topic" default="/digital_twin/anchor_request"/>
   <arg name="anchor_store_path" default="/tmp/digital_twin_anchor.yaml"/>
   <arg name="auto_anchor_on_first_scan" default="true"/>
@@ -83,6 +87,34 @@
   <arg name="infrastructure_goal_topic"
        default="/infrastructure/inspection_goal"/>
   <arg name="infrastructure_goal_cooldown_sec" default="20.0"/>
+  <arg name="prefer_defect_rescans" default="true"/>
+  <arg name="planner_hold_for_scan" default="true"/>
+  <arg name="planner_scan_wait_timeout_sec" default="300.0"/>
+  <arg name="scan_complete_topic" default="/digital_twin/scan_complete"/>
+  <arg name="allow_exploration_topic" default="/mission/allow_exploration"/>
+  <arg name="spot_localization" default="false"/>
+  <arg name="spot_frame" default="vision"/>
+  <arg name="spot_odom_topic" default="/spot/odom"/>
+  <arg name="spot_odom_publish_rate_hz" default="10.0"/>
+  <arg name="eap_lidar" default="false"/>
+  <arg name="eap_lidar_topic" default="/eap/points"/>
+  <arg name="eap_point_cloud_service" default="velodyne-point-cloud"/>
+  <arg name="eap_point_cloud_source" default="velodyne-point-cloud"/>
+  <arg name="eap_publish_rate_hz" default="5.0"/>
+  <arg name="eap_max_points" default="200000"/>
+  <arg name="mission_manager" default="false"/>
+  <arg name="mission_state_topic" default="/mission/state"/>
+  <arg name="mission_return_home_topic" default="/mission/return_home"/>
+  <arg name="mission_upload_complete_topic" default="/mission/upload_complete"/>
+  <arg name="mission_summary_path" default="/tmp/mission_summary.yaml"/>
+  <arg name="mission_max_stations" default="0"/>
+  <arg name="mission_max_excursion_m" default="30.0"/>
+  <arg name="mission_duration_sec" default="0.0"/>
+  <arg name="mission_no_frontier_patience_sec" default="60.0"/>
+  <arg name="mission_breadcrumb_min_spacing_m" default="2.0"/>
+  <arg name="mission_return_leg_timeout_sec" default="90.0"/>
+  <arg name="mission_home_position_tolerance_m" default="1.0"/>
+  <arg name="trimble_scan_timeout_sec" default="300.0"/>
   <arg name="robot_goal_bridge" default="false"/>
   <arg name="robot_goal_backend" default="dry_run"/>
   <arg name="spot_command_url" default=""/>
@@ -106,6 +138,7 @@
   <arg name="trimble_camera_preview_rate_hz" default="2.0"/>
   <arg name="trimble_camera_preview_width" default="640"/>
   <arg name="defect_map" default="false"/>
+  <arg name="defect_map_minimum_confidence" default="0.50"/>
   <arg name="defect_map_store_path"
        default="/tmp/digital_twin_defects.yaml"/>
   <arg name="defect_map_markers_topic"
@@ -131,8 +164,6 @@
     <arg name="camera_frame_rate" value="$(var camera_frame_rate)"/>
     <arg name="camera_reconnect_interval_sec"
          value="$(var camera_reconnect_interval_sec)"/>
-    <arg name="image_monitor" value="$(var image_monitor)"/>
-    <arg name="pointcloud_monitor" value="$(var pointcloud_monitor)"/>
     <arg name="detector" value="$(var detector)"/>
     <arg name="dataset_path" value="$(var dataset_path)"/>
     <arg name="model_path" value="$(var model_path)"/>
@@ -140,25 +171,23 @@
     <arg name="detections_2d_topic" value="$(var detections_2d_topic)"/>
     <arg name="pointcloud_topic" value="$(var pointcloud_topic)"/>
     <arg name="detections_3d_topic" value="$(var detections_3d_topic)"/>
-    <arg name="fusion" value="$(var fusion)"/>
-    <arg name="calibration_path" value="$(var calibration_path)"/>
-    <arg name="oak_depth_navigation"
-         value="$(var oak_depth_navigation)"/>
-    <arg name="oak_depth_topic" value="$(var oak_depth_topic)"/>
-    <arg name="oak_camera_info_topic"
-         value="$(var oak_camera_info_topic)"/>
-    <arg name="oak_depth_minimum_confidence"
-         value="$(var oak_depth_minimum_confidence)"/>
-    <arg name="oak_depth_bbox_padding_px"
-         value="$(var oak_depth_bbox_padding_px)"/>
-    <arg name="oak_depth_default_bbox_size_m"
-         value="$(var oak_depth_default_bbox_size_m)"/>
-    <arg name="oak_localization" value="$(var oak_localization)"/>
-    <arg name="oak_odom_topic" value="$(var oak_odom_topic)"/>
-    <arg name="oak_odom_frame" value="$(var oak_odom_frame)"/>
-    <arg name="oak_odom_base_frame" value="$(var oak_odom_base_frame)"/>
-    <arg name="oak_odom_use_message_frame_ids"
-         value="$(var oak_odom_use_message_frame_ids)"/>
+    <arg name="depth_navigation"
+         value="$(var depth_navigation)"/>
+    <arg name="depth_topic" value="$(var depth_topic)"/>
+    <arg name="depth_camera_info_topic"
+         value="$(var depth_camera_info_topic)"/>
+    <arg name="depth_minimum_confidence"
+         value="$(var depth_minimum_confidence)"/>
+    <arg name="depth_bbox_padding_px"
+         value="$(var depth_bbox_padding_px)"/>
+    <arg name="depth_default_bbox_size_m"
+         value="$(var depth_default_bbox_size_m)"/>
+    <arg name="depth_localization" value="$(var depth_localization)"/>
+    <arg name="depth_odom_topic" value="$(var depth_odom_topic)"/>
+    <arg name="depth_odom_frame" value="$(var depth_odom_frame)"/>
+    <arg name="depth_odom_base_frame" value="$(var depth_odom_base_frame)"/>
+    <arg name="depth_odom_use_message_frame_ids"
+         value="$(var depth_odom_use_message_frame_ids)"/>
     <arg name="visualization" value="$(var visualization)"/>
     <arg name="rviz" value="$(var rviz)"/>
     <arg name="visualization_pointcloud_topic"
@@ -167,20 +196,12 @@
     <arg name="box_alpha" value="$(var box_alpha)"/>
     <arg name="label_height" value="$(var label_height)"/>
     <arg name="marker_lifetime_sec" value="$(var marker_lifetime_sec)"/>
-    <arg name="autonomous_navigation"
-         value="$(var autonomous_navigation)"/>
-    <arg name="autonomous_navigation_enabled"
-         value="$(var autonomous_navigation_enabled)"/>
     <arg name="navigation_target_frame"
          value="$(var navigation_target_frame)"/>
     <arg name="navigation_base_frame"
          value="$(var navigation_base_frame)"/>
     <arg name="navigation_standoff_distance"
          value="$(var navigation_standoff_distance)"/>
-    <arg name="navigation_minimum_confidence"
-         value="$(var navigation_minimum_confidence)"/>
-    <arg name="navigation_priority_config"
-         value="$(var navigation_priority_config)"/>
     <arg name="sync_queue_size" value="$(var sync_queue_size)"/>
     <arg name="sync_slop_sec" value="$(var sync_slop_sec)"/>
     <arg name="trimble_scan_watcher" value="$(var trimble_scan_watcher)"/>
@@ -193,12 +214,15 @@
     <arg name="trimble_require_scan_request"
          value="$(var trimble_require_scan_request)"/>
     <arg name="scan_decision" value="$(var scan_decision)"/>
+    <arg name="scan_mode" value="$(var scan_mode)"/>
+    <arg name="scan_request_initial" value="$(var scan_request_initial)"/>
     <arg name="scan_required_topic" value="$(var scan_required_topic)"/>
     <arg name="scan_reason_topic" value="$(var scan_reason_topic)"/>
     <arg name="scan_confidence_threshold"
          value="$(var scan_confidence_threshold)"/>
     <arg name="scan_min_detections" value="$(var scan_min_detections)"/>
     <arg name="scan_cooldown_sec" value="$(var scan_cooldown_sec)"/>
+    <arg name="min_scan_separation_m" value="$(var min_scan_separation_m)"/>
     <arg name="digital_twin_map" value="$(var digital_twin_map)"/>
     <arg name="digital_twin_map_topic"
          value="$(var digital_twin_map_topic)"/>
@@ -208,11 +232,28 @@
          value="$(var digital_twin_scan_origin_x)"/>
     <arg name="digital_twin_scan_origin_y"
          value="$(var digital_twin_scan_origin_y)"/>
-    <arg name="frontier_planner" value="$(var frontier_planner)"/>
-    <arg name="frontier_goal_topic" value="$(var frontier_goal_topic)"/>
+    <arg name="digital_twin_accumulate"
+         value="$(var digital_twin_accumulate)"/>
+    <arg name="digital_twin_use_tf_scan_origin"
+         value="$(var digital_twin_use_tf_scan_origin)"/>
+    <arg name="map_eap_enabled" value="$(var map_eap_enabled)"/>
+    <arg name="map_eap_topic" value="$(var map_eap_topic)"/>
+    <arg name="map_eap_max_range_m" value="$(var map_eap_max_range_m)"/>
+    <arg name="map_eap_max_points_per_update"
+         value="$(var map_eap_max_points_per_update)"/>
+    <arg name="map_eap_sensor_frame" value="$(var map_eap_sensor_frame)"/>
+    <arg name="map_eap_update_period_sec"
+         value="$(var map_eap_update_period_sec)"/>
+    <arg name="map_depth_enabled" value="$(var map_depth_enabled)"/>
+    <arg name="map_depth_points_topic"
+         value="$(var map_depth_points_topic)"/>
+    <arg name="map_depth_max_range_m" value="$(var map_depth_max_range_m)"/>
+    <arg name="map_depth_max_points_per_update"
+         value="$(var map_depth_max_points_per_update)"/>
+    <arg name="map_depth_sensor_frame" value="$(var map_depth_sensor_frame)"/>
+    <arg name="map_depth_update_period_sec"
+         value="$(var map_depth_update_period_sec)"/>
     <arg name="waypoint_arrived_topic" value="$(var waypoint_arrived_topic)"/>
-    <arg name="frontier_send_nav2_goals"
-         value="$(var frontier_send_nav2_goals)"/>
     <arg name="frame_anchor" value="$(var frame_anchor)"/>
     <arg name="robot_world_frame" value="$(var robot_world_frame)"/>
     <arg name="anchor_request_topic" value="$(var anchor_request_topic)"/>
@@ -225,6 +266,47 @@
          value="$(var infrastructure_goal_topic)"/>
     <arg name="infrastructure_goal_cooldown_sec"
          value="$(var infrastructure_goal_cooldown_sec)"/>
+    <arg name="prefer_defect_rescans" value="$(var prefer_defect_rescans)"/>
+    <arg name="planner_hold_for_scan" value="$(var planner_hold_for_scan)"/>
+    <arg name="planner_scan_wait_timeout_sec"
+         value="$(var planner_scan_wait_timeout_sec)"/>
+    <arg name="scan_complete_topic" value="$(var scan_complete_topic)"/>
+    <arg name="allow_exploration_topic"
+         value="$(var allow_exploration_topic)"/>
+    <arg name="spot_localization" value="$(var spot_localization)"/>
+    <arg name="spot_frame" value="$(var spot_frame)"/>
+    <arg name="spot_odom_topic" value="$(var spot_odom_topic)"/>
+    <arg name="spot_odom_publish_rate_hz"
+         value="$(var spot_odom_publish_rate_hz)"/>
+    <arg name="eap_lidar" value="$(var eap_lidar)"/>
+    <arg name="eap_lidar_topic" value="$(var eap_lidar_topic)"/>
+    <arg name="eap_point_cloud_service"
+         value="$(var eap_point_cloud_service)"/>
+    <arg name="eap_point_cloud_source"
+         value="$(var eap_point_cloud_source)"/>
+    <arg name="eap_publish_rate_hz" value="$(var eap_publish_rate_hz)"/>
+    <arg name="eap_max_points" value="$(var eap_max_points)"/>
+    <arg name="mission_manager" value="$(var mission_manager)"/>
+    <arg name="mission_state_topic" value="$(var mission_state_topic)"/>
+    <arg name="mission_return_home_topic"
+         value="$(var mission_return_home_topic)"/>
+    <arg name="mission_upload_complete_topic"
+         value="$(var mission_upload_complete_topic)"/>
+    <arg name="mission_summary_path" value="$(var mission_summary_path)"/>
+    <arg name="mission_max_stations" value="$(var mission_max_stations)"/>
+    <arg name="mission_max_excursion_m"
+         value="$(var mission_max_excursion_m)"/>
+    <arg name="mission_duration_sec" value="$(var mission_duration_sec)"/>
+    <arg name="mission_no_frontier_patience_sec"
+         value="$(var mission_no_frontier_patience_sec)"/>
+    <arg name="mission_breadcrumb_min_spacing_m"
+         value="$(var mission_breadcrumb_min_spacing_m)"/>
+    <arg name="mission_return_leg_timeout_sec"
+         value="$(var mission_return_leg_timeout_sec)"/>
+    <arg name="mission_home_position_tolerance_m"
+         value="$(var mission_home_position_tolerance_m)"/>
+    <arg name="trimble_scan_timeout_sec"
+         value="$(var trimble_scan_timeout_sec)"/>
     <arg name="robot_goal_bridge" value="$(var robot_goal_bridge)"/>
     <arg name="robot_goal_backend" value="$(var robot_goal_backend)"/>
     <arg name="spot_command_url" value="$(var spot_command_url)"/>
@@ -258,7 +340,8 @@
     <arg name="trimble_camera_preview_width"
          value="$(var trimble_camera_preview_width)"/>
     <arg name="defect_map" value="$(var defect_map)"/>
-    <arg name="defect_map_store_path"
+    <arg name="defect_map_minimum_confidence" default="0.50"/>
+  <arg name="defect_map_store_path"
          value="$(var defect_map_store_path)"/>
     <arg name="defect_map_markers_topic"
          value="$(var defect_map_markers_topic)"/>

@@ -5,13 +5,13 @@ from rclpy.node import Node
 from tf2_ros import TransformBroadcaster
 
 
-class OakLocalizationBridge(Node):
+class DepthLocalizationBridge(Node):
 
     def __init__(self):
-        super().__init__('oak_localization_bridge')
+        super().__init__('depth_localization_bridge')
 
         self.declare_parameter('odom_topic', '/oak/odom')
-        self.declare_parameter('odom_frame', 'oak_odom')
+        self.declare_parameter('odom_frame', 'depth_odom')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('use_message_frame_ids', True)
         self.declare_parameter('zero_z', True)
@@ -40,7 +40,7 @@ class OakLocalizationBridge(Node):
             10,
         )
         self.get_logger().info(
-            f'Using OAK localization from {odom_topic}; '
+            f'Using depth-camera localization from {odom_topic}; '
             f'default TF {self.odom_frame}->{self.base_frame}'
         )
 
@@ -66,7 +66,7 @@ class OakLocalizationBridge(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = OakLocalizationBridge()
+    node = DepthLocalizationBridge()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

@@ -24,11 +24,9 @@ def angle_difference(target, current):
 class GoalDriverNode(Node):
     """Drive the simulated robot toward planner goals with cmd_vel.
 
-    Stands in for Nav2/Spot in simulation: subscribes to the inspection
-    and frontier goals, looks up the robot pose over TF, and publishes a
-    proportional velocity command until the goal pose is reached. Stays
-    parked until the first Trimble reference scan so the digital twin
-    anchor captures the spawn pose.
+    Stands in for Spot in simulation: subscribes to inspection goals,
+    looks up the robot pose over TF, and publishes a proportional
+    velocity command until the goal pose is reached.
     """
 
     def __init__(self):
@@ -36,7 +34,6 @@ class GoalDriverNode(Node):
 
         self.declare_parameter('cmd_vel_topic', '/cmd_vel')
         self.declare_parameter('inspection_goal_topic', '/infrastructure/inspection_goal')
-        self.declare_parameter('frontier_goal_topic', '/digital_twin/frontier_goal')
         self.declare_parameter('scan_topic', '/trimble/x7/scan_points')
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_link')
@@ -70,12 +67,6 @@ class GoalDriverNode(Node):
             10,
         )
         self.create_subscription(
-            PoseStamped,
-            self.get_parameter('frontier_goal_topic').value,
-            self.frontier_goal_callback,
-            10,
-        )
-        self.create_subscription(
             PointCloud2,
             self.get_parameter('scan_topic').value,
             self.scan_seen_callback,
@@ -95,13 +86,6 @@ class GoalDriverNode(Node):
 
     def inspection_goal_callback(self, goal):
         self.set_goal(goal, 'inspection')
-
-    def frontier_goal_callback(self, goal):
-        # Inspection goals are verified by the robot goal bridge; prefer
-        # them when both planners are active.
-        if self.active_goal is not None and self.active_goal[1] == 'inspection':
-            return
-        self.set_goal(goal, 'frontier')
 
     def set_goal(self, goal, source):
         in_odom = self.goal_in_odom(goal)

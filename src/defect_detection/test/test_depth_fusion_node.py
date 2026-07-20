@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from vision_msgs.msg import Detection2D
 
-from defect_detection.digital_twin.oak_depth_fusion_node import (
+from defect_detection.digital_twin.depth_fusion_node import (
     bbox_bounds,
     depth_image_to_meters,
     project_pixel_to_camera,
@@ -38,7 +38,7 @@ def test_bbox_bounds_clamps_to_image():
     )
 
 
-def test_depth_image_to_meters_handles_oak_uint16_mm():
+def test_depth_image_to_meters_handles_uint16_mm():
     depth_mm = np.array([[1000, 2500]], dtype=np.uint16)
     np.testing.assert_allclose(
         depth_image_to_meters(depth_mm, '16UC1'),

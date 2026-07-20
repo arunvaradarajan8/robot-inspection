@@ -1,12 +1,12 @@
 import math
 import time
 
-from geometry_msgs.msg import Pose, PoseArray, PoseStamped
+from geometry_msgs.msg import PoseArray, PoseStamped
 from nav_msgs.msg import OccupancyGrid
 import rclpy
 from rclpy.duration import Duration
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from tf2_ros import Buffer, TransformException, TransformListener
 
 
@@ -44,6 +44,27 @@ class InfrastructurePlanner(Node):
         self.declare_parameter('goal_cooldown_sec', 20.0)
         self.declare_parameter('planning_period_sec', 5.0)
         self.declare_parameter('prefer_defect_rescans', True)
+        # Stop publishing goals between a waypoint arrival (or scan
+        # request) and the scanner reporting that it finished, so the
+        # robot stands still for the duration of the X7 scan.
+        self.declare_parameter('hold_for_scan', True)
+        self.declare_parameter('scan_required_topic', '/digital_twin/scan_required')
+        # The X7 keeps its scans on its own SD card, so nothing comes back
+        # over ROS to signal the end of a scan. The Windows bridge reports
+        # completion on this topic instead.
+        self.declare_parameter('scan_complete_topic', '/digital_twin/scan_complete')
+        self.declare_parameter(
+            'waypoint_arrived_topic',
+            '/digital_twin/waypoint_arrived',
+        )
+        # The mission manager takes over goal publishing when the mission
+        # stops exploring and starts walking home.
+        self.declare_parameter(
+            'allow_exploration_topic',
+            '/mission/allow_exploration',
+        )
+        self.declare_parameter('scan_wait_timeout_sec', 300.0)
+        self.declare_parameter('scan_decision_settle_sec', 5.0)
 
         self.enabled = self.get_parameter(
             'enabled'
@@ -81,6 +102,27 @@ class InfrastructurePlanner(Node):
         self.prefer_defect_rescans = self.get_parameter(
             'prefer_defect_rescans'
         ).get_parameter_value().bool_value
+        self.hold_for_scan = self.get_parameter(
+            'hold_for_scan'
+        ).get_parameter_value().bool_value
+        scan_required_topic = self.get_parameter(
+            'scan_required_topic'
+        ).get_parameter_value().string_value
+        scan_complete_topic = self.get_parameter(
+            'scan_complete_topic'
+        ).get_parameter_value().string_value
+        waypoint_arrived_topic = self.get_parameter(
+            'waypoint_arrived_topic'
+        ).get_parameter_value().string_value
+        allow_exploration_topic = self.get_parameter(
+            'allow_exploration_topic'
+        ).get_parameter_value().string_value
+        self.scan_wait_timeout = self.get_parameter(
+            'scan_wait_timeout_sec'
+        ).get_parameter_value().double_value
+        self.scan_decision_settle = self.get_parameter(
+            'scan_decision_settle_sec'
+        ).get_parameter_value().double_value
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -102,6 +144,41 @@ class InfrastructurePlanner(Node):
         self.rescan_goals = []
         self.last_goal_time = 0.0
         self.last_goal_key = None
+        # None, 'decision' (arrived; scan decision pending) or
+        # 'scan' (scan requested; waiting for the scan to be ingested).
+        self.hold_state = None
+        self.hold_since = 0.0
+        # Explore until the mission manager says otherwise. Missions that
+        # run without a mission manager keep exploring indefinitely.
+        self.allow_exploration = True
+
+        self.allow_exploration_subscription = self.create_subscription(
+            Bool,
+            allow_exploration_topic,
+            self.allow_exploration_callback,
+            10,
+        )
+
+        if self.hold_for_scan:
+            self.scan_required_subscription = self.create_subscription(
+                Bool,
+                scan_required_topic,
+                self.scan_required_callback,
+                10,
+            )
+            self.scan_complete_subscription = self.create_subscription(
+                Bool,
+                scan_complete_topic,
+                self.scan_complete_callback,
+                10,
+            )
+            self.arrival_subscription = self.create_subscription(
+                String,
+                waypoint_arrived_topic,
+                self.waypoint_arrived_callback,
+                10,
+            )
+
         self.timer = self.create_timer(
             max(0.5, planning_period),
             self.plan_tick,
@@ -118,10 +195,57 @@ class InfrastructurePlanner(Node):
     def rescan_goals_callback(self, poses):
         self.rescan_goals = list(poses.poses)
 
+    def waypoint_arrived_callback(self, _message):
+        # An arrival usually precedes a scan request; wait for the scan
+        # decision before moving on so the X7 is not dragged mid-scan.
+        self.hold_state = 'decision'
+        self.hold_since = time.monotonic()
+
+    def scan_required_callback(self, message):
+        now = time.monotonic()
+        if message.data:
+            self.hold_state = 'scan'
+            self.hold_since = now
+        elif (
+            self.hold_state == 'decision'
+            and now - self.hold_since > self.scan_decision_settle
+        ):
+            # The scan decision declined to scan here; resume exploring.
+            self.hold_state = None
+
+    def scan_complete_callback(self, message):
+        if message.data and self.hold_state is not None:
+            self.hold_state = None
+            self.publish_status('scan finished; resuming exploration')
+
+    def allow_exploration_callback(self, message):
+        if message.data == self.allow_exploration:
+            return
+        self.allow_exploration = message.data
+        self.publish_status(
+            'exploration resumed by the mission manager'
+            if message.data
+            else 'exploration paused by the mission manager'
+        )
+
+    def scan_hold_active(self, now):
+        if self.hold_state is None:
+            return False
+        if now - self.hold_since > self.scan_wait_timeout:
+            self.publish_status(
+                'scan hold timed out; resuming exploration'
+            )
+            self.hold_state = None
+            return False
+        return True
+
     def plan_tick(self):
-        if not self.enabled:
+        if not self.enabled or not self.allow_exploration:
             return
         now = time.monotonic()
+        if self.scan_hold_active(now):
+            self.publish_status('holding position for X7 scan')
+            return
         if now - self.last_goal_time < self.goal_cooldown:
             return
         robot = self.robot_position()

@@ -29,7 +29,19 @@ class ScanDecisionNode(Node):
     def __init__(self):
         super().__init__('digital_twin_scan_decision')
 
+        # 'coverage' scans wherever the planner parked the robot, whether
+        # that was a defect standoff or a frontier station. This is the
+        # mission default: the planner already decided the stop was worth
+        # making, so the X7 should capture it.
+        # 'detection' is the narrower gate, requiring live high-confidence
+        # YOLO detections before spending a scan.
+        self.declare_parameter('mode', 'coverage')
         self.declare_parameter('detections_topic', '/detections_2d')
+        self.declare_parameter(
+            'waypoint_arrived_topic',
+            '/digital_twin/waypoint_arrived',
+        )
+        self.declare_parameter('request_initial_scan', True)
         self.declare_parameter('scan_required_topic', '/digital_twin/scan_required')
         self.declare_parameter('scan_reason_topic', '/digital_twin/scan_reason')
         self.declare_parameter('confidence_threshold', 0.65)
@@ -37,13 +49,24 @@ class ScanDecisionNode(Node):
         self.declare_parameter('decision_period_sec', 2.0)
         self.declare_parameter('detection_timeout_sec', 3.0)
         self.declare_parameter('scan_cooldown_sec', 60.0)
-        self.declare_parameter('min_scan_separation_m', 2.0)
+        self.declare_parameter('min_scan_separation_m', 10.0)
         self.declare_parameter('target_frame', 'map')
         self.declare_parameter('base_frame', 'base_link')
 
+        self.mode = self.get_parameter(
+            'mode'
+        ).get_parameter_value().string_value
+        if self.mode not in {'detection', 'coverage'}:
+            raise ValueError("mode must be 'detection' or 'coverage'")
         detections_topic = self.get_parameter(
             'detections_topic'
         ).get_parameter_value().string_value
+        waypoint_arrived_topic = self.get_parameter(
+            'waypoint_arrived_topic'
+        ).get_parameter_value().string_value
+        self.request_initial_scan = self.get_parameter(
+            'request_initial_scan'
+        ).get_parameter_value().bool_value
         scan_required_topic = self.get_parameter(
             'scan_required_topic'
         ).get_parameter_value().string_value
@@ -86,6 +109,7 @@ class ScanDecisionNode(Node):
         self.total_count = 0
         self.last_max_confidence = 0.0
         self.scan_positions = []
+        self.arrival_pending = False
 
         self.tf_buffer = None
         self.tf_listener = None
@@ -103,21 +127,38 @@ class ScanDecisionNode(Node):
             scan_reason_topic,
             10,
         )
-        # Sensor-data QoS so best-effort detection publishers (the YOLO
-        # node publishes with sensor QoS) can connect.
-        self.subscription = self.create_subscription(
-            Detection2DArray,
-            detections_topic,
-            self.detections_callback,
-            qos_profile_sensor_data,
-        )
+        if self.mode == 'detection':
+            # Sensor-data QoS so best-effort detection publishers (the YOLO
+            # node publishes with sensor QoS) can connect.
+            self.subscription = self.create_subscription(
+                Detection2DArray,
+                detections_topic,
+                self.detections_callback,
+                qos_profile_sensor_data,
+            )
+        else:
+            self.arrival_subscription = self.create_subscription(
+                String,
+                waypoint_arrived_topic,
+                self.waypoint_arrived_callback,
+                10,
+            )
+
         self.timer = self.create_timer(decision_period, self.evaluate)
-        self.get_logger().info(
-            f'Gating X7 scans from {detections_topic}: '
-            f'threshold={self.confidence_threshold:.2f}, '
-            f'min_detections={self.min_detections}, '
-            f'min_scan_separation={self.min_scan_separation:.1f}m'
-        )
+        if self.mode == 'detection':
+            self.get_logger().info(
+                f'Gating X7 scans from {detections_topic}: '
+                f'threshold={self.confidence_threshold:.2f}, '
+                f'min_detections={self.min_detections}, '
+                f'min_scan_separation={self.min_scan_separation:.1f}m'
+            )
+        else:
+            self.get_logger().info(
+                'Scan-on-arrival mode: requesting X7 scans at every '
+                f'waypoint arrival from {waypoint_arrived_topic}, '
+                f'cooldown={self.scan_cooldown:.0f}s, '
+                f'min_scan_separation={self.min_scan_separation:.1f}m'
+            )
 
     def detections_callback(self, detections_msg):
         self.last_detection_time = time.monotonic()
@@ -133,6 +174,9 @@ class ScanDecisionNode(Node):
             )
         else:
             self.last_max_confidence = 0.0
+
+    def waypoint_arrived_callback(self, _message):
+        self.arrival_pending = True
 
     def evaluate(self):
         now = time.monotonic()
@@ -176,6 +220,52 @@ class ScanDecisionNode(Node):
         )
 
     def scan_decision(self, now, robot_x=None, robot_y=None):
+        if self.mode == 'coverage':
+            return self.coverage_scan_decision(now, robot_x, robot_y)
+        return self.detection_scan_decision(now, robot_x, robot_y)
+
+    def coverage_scan_decision(self, now, robot_x=None, robot_y=None):
+        if self.last_scan_request_time is None:
+            if self.request_initial_scan:
+                return True, (
+                    'Requesting X7 scan: initial coverage reference scan'
+                )
+            return False, (
+                'Skipping X7 scan: waiting for the first waypoint arrival'
+            )
+
+        if not self.arrival_pending:
+            return False, (
+                'Skipping X7 scan: waiting for the next waypoint arrival'
+            )
+
+        cooldown_remaining = (
+            self.scan_cooldown - (now - self.last_scan_request_time)
+        )
+        if cooldown_remaining > 0.0:
+            # Keep the arrival pending so the scan fires once the
+            # cooldown expires instead of being dropped.
+            return False, (
+                'Skipping X7 scan: scan cooldown active '
+                f'({cooldown_remaining:.1f}s remaining)'
+            )
+
+        if self.min_scan_separation > 0.0 and robot_x is not None:
+            nearest = self.nearest_scan_distance(robot_x, robot_y)
+            if nearest is not None and nearest < self.min_scan_separation:
+                self.arrival_pending = False
+                return False, (
+                    'Skipping X7 scan: too close to a previous scan '
+                    f'({nearest:.1f}m away, minimum separation '
+                    f'{self.min_scan_separation:.1f}m)'
+                )
+
+        self.arrival_pending = False
+        return True, (
+            'Requesting X7 scan: coverage waypoint reached'
+        )
+
+    def detection_scan_decision(self, now, robot_x=None, robot_y=None):
         if self.last_detection_time is None:
             return False, 'Skipping X7 scan: no detections received yet'
 

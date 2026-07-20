@@ -17,6 +17,12 @@
        description="Open RViz with the demo layout."/>
   <arg name="demo_root" default="/tmp/synthetic_demo"
        description="Scratch directory for scans, anchor, and defect store."/>
+  <arg name="scan_mode" default="coverage"
+       description="'coverage' explores frontiers and scans at every waypoint."/>
+  <arg name="prefer_defect_rescans" default="true"/>
+  <arg name="planner_hold_for_scan" default="true"/>
+  <arg name="digital_twin_accumulate" default="true"/>
+  <arg name="digital_twin_use_tf_scan_origin" default="false"/>
 
   <node pkg="defect_detection"
         exec="synthetic_field_node"
@@ -31,24 +37,41 @@
     <arg name="detector" value="false"/>
 
     <!-- Real production nodes under test. -->
-    <arg name="oak_depth_navigation" value="true"/>
+    <arg name="depth_navigation" value="true"/>
     <arg name="visualization" value="true"/>
     <arg name="scan_decision" value="true"/>
-    <arg name="trimble_scan_watcher" value="true"/>
+    <!-- The X7 is trigger-only, exactly as in the field: the sim writes a
+         LAS to stand in for the scanner's SD card and nothing reads it. -->
+    <arg name="trimble_scan_watcher" value="false"/>
     <arg name="trimble_scan_directory" value="$(var demo_root)/trimble_scans"/>
     <arg name="digital_twin_map" value="true"/>
-    <arg name="frontier_planner" value="true"/>
-    <arg name="frame_anchor" value="true"/>
+    <!-- The synthetic world cloud stands in for the EAP lidar. There is no
+         simulated depth point cloud, so that source stays off here. -->
+    <arg name="map_eap_topic" value="/lidar/points"/>
+    <arg name="map_depth_enabled" value="false"/>
+    <arg name="frame_anchor" value="false"/>
     <arg name="anchor_store_path" value="$(var demo_root)/anchor.yaml"/>
     <arg name="infrastructure_planner" value="true"/>
+    <arg name="mission_manager" value="true"/>
+    <arg name="mission_summary_path" value="$(var demo_root)/mission.yaml"/>
+    <arg name="mission_max_excursion_m" value="12.0"/>
     <arg name="robot_goal_bridge" value="true"/>
     <arg name="robot_goal_backend" value="dry_run"/>
     <arg name="arrival_base_frame" value="base_link"/>
     <arg name="defect_map" value="true"/>
     <arg name="defect_map_store_path" value="$(var demo_root)/defects.yaml"/>
 
-    <!-- Demo pacing: rescan sooner than the field default. -->
+    <!-- Demo pacing: rescan sooner and closer than the field defaults;
+         the synthetic wall is only 16m wide. -->
     <arg name="scan_cooldown_sec" value="45.0"/>
+    <arg name="min_scan_separation_m" value="2.0"/>
+    <arg name="scan_mode" value="$(var scan_mode)"/>
+    <arg name="prefer_defect_rescans" value="$(var prefer_defect_rescans)"/>
+    <arg name="planner_hold_for_scan" value="$(var planner_hold_for_scan)"/>
+    <arg name="digital_twin_accumulate"
+         value="$(var digital_twin_accumulate)"/>
+    <arg name="digital_twin_use_tf_scan_origin"
+         value="$(var digital_twin_use_tf_scan_origin)"/>
 
     <!-- The demo ships its own RViz layout below. -->
     <arg name="rviz" value="false"/>

@@ -1,3 +1,0 @@
-# Larger values are inspected first. Keys are Detection3D class_id strings.
-default_priority: 1.0
-class_priorities: {}

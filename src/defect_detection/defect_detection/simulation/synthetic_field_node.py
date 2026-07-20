@@ -99,13 +99,13 @@ class SyntheticFieldNode(Node):
         self.declare_parameter('pointcloud_topic', '/lidar/points')
         self.declare_parameter('scan_required_topic', '/digital_twin/scan_required')
         self.declare_parameter('scan_topic', '/trimble/x7/scan_points')
+        self.declare_parameter('scan_complete_topic', '/digital_twin/scan_complete')
         self.declare_parameter('scan_directory', '/tmp/synthetic_demo/trimble_scans')
         self.declare_parameter('scan_frame', 'map')
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('camera_frame', 'camera_optical_frame')
         self.declare_parameter('inspection_goal_topic', '/infrastructure/inspection_goal')
-        self.declare_parameter('frontier_goal_topic', '/digital_twin/frontier_goal')
         self.declare_parameter('robot_speed_mps', 0.7)
         self.declare_parameter('image_width', 640)
         self.declare_parameter('image_height', 400)
@@ -182,6 +182,11 @@ class SyntheticFieldNode(Node):
         self.scan_publisher = self.create_publisher(
             PointCloud2, self.scan_topic, qos_profile_sensor_data,
         )
+        # Stands in for the Windows bridge reporting that the X7 finished.
+        # Without it the planner would hold position at every station.
+        self.scan_complete_publisher = self.create_publisher(
+            Bool, self.get_parameter('scan_complete_topic').value, 10,
+        )
 
         self.create_subscription(
             Bool,
@@ -201,12 +206,6 @@ class SyntheticFieldNode(Node):
             self.inspection_goal_callback,
             10,
         )
-        self.create_subscription(
-            PoseStamped,
-            self.get_parameter('frontier_goal_topic').value,
-            self.frontier_goal_callback,
-            10,
-        )
 
         self.sensor_timer = self.create_timer(1.0 / self.rate_hz, self.sensor_tick)
         self.motion_timer = self.create_timer(0.05, self.motion_tick)
@@ -224,13 +223,6 @@ class SyntheticFieldNode(Node):
 
     def inspection_goal_callback(self, goal):
         self.set_goal(goal, 'inspection')
-
-    def frontier_goal_callback(self, goal):
-        # Inspection goals are verified by the robot goal bridge; prefer
-        # them when both planners are talking.
-        if self.active_goal is not None and self.active_goal[2] == 'inspection':
-            return
-        self.set_goal(goal, 'frontier')
 
     def set_goal(self, goal, source):
         position = self.goal_in_odom(goal)
@@ -582,11 +574,14 @@ class SyntheticFieldNode(Node):
                 'laspy is not installed; published the synthetic scan '
                 f'directly on {self.scan_topic} instead of writing a LAS file.'
             )
+            self.scan_complete_publisher.publish(Bool(data=True))
             return
         self.get_logger().info(
-            f'Simulated Trimble scan written: {target} '
-            f'({len(points)} points); the scan watcher will publish it.'
+            f'Simulated Trimble scan written: {target} ({len(points)} points). '
+            'Nothing is ingested from it; the file only stands in for the '
+            'scan the real X7 keeps on its SD card.'
         )
+        self.scan_complete_publisher.publish(Bool(data=True))
 
 
 def main(args=None):

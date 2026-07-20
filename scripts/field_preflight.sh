@@ -37,12 +37,16 @@ check_file() {
   fi
 }
 
-camera_index="${CAMERA_INDEX:-0}"
-if [[ -e "/dev/video${camera_index}" ]]; then
-  printf 'OK:   webcam device: /dev/video%s\n' "${camera_index}"
-else
-  printf 'FAIL: webcam device missing: /dev/video%s\n' "${camera_index}"
-  failures=$((failures + 1))
+# Mission mode expects a depth camera driver publishing over ROS rather
+# than a local V4L webcam, so the /dev/video check does not apply.
+if [[ "${MODE}" != "mission" ]]; then
+  camera_index="${CAMERA_INDEX:-0}"
+  if [[ -e "/dev/video${camera_index}" ]]; then
+    printf 'OK:   webcam device: /dev/video%s\n' "${camera_index}"
+  else
+    printf 'FAIL: webcam device missing: /dev/video%s\n' "${camera_index}"
+    failures=$((failures + 1))
+  fi
 fi
 
 if python3 -c 'import rclpy, laspy, lazrs' >/dev/null 2>&1; then
@@ -60,48 +64,49 @@ else
   failures=$((failures + 1))
 fi
 
-if [[ "${AUTONOMOUS_NAVIGATION_ENABLED:-false}" == "true" &&
-      "${AUTONOMOUS_NAVIGATION:-false}" != "true" ]]; then
-  printf 'FAIL: AUTONOMOUS_NAVIGATION_ENABLED requires AUTONOMOUS_NAVIGATION=true\n'
-  failures=$((failures + 1))
-fi  
-
-if [[ "${AUTONOMOUS_NAVIGATION:-false}" == "true" ]]; then
-  if python3 -c 'import nav2_msgs' >/dev/null 2>&1; then
-    printf 'OK:   Nav2 Python messages are available\n'
-  else
-    printf 'FAIL: nav2_msgs is unavailable; install ROS Nav2 dependencies\n'
-    failures=$((failures + 1))
-  fi
-
-  check_file \
-    'navigation priority configuration' \
-    "${NAVIGATION_PRIORITY_CONFIG:-}"
+needs_spot_sdk=false
+if [[ "${MODE}" == "mission" ]]; then
+  needs_spot_sdk=true
+fi
+if [[ "${ROBOT_GOAL_BACKEND:-}" == "spot_sdk" ||
+      "${SPOT_LOCALIZATION:-false}" == "true" ||
+      "${EAP_LIDAR:-false}" == "true" ]]; then
+  needs_spot_sdk=true
 fi
 
-if [[ "${MODE}" == "full" ]]; then
-  check_file 'YOLO model' "${MODEL_PATH:-}"
-  check_file 'dataset configuration' "${DATASET_PATH:-}"
-  check_file 'camera-LiDAR calibration' "${CALIBRATION_PATH:-}"
+if [[ "${needs_spot_sdk}" == "true" ]]; then
+  if python3 -c 'import bosdyn.client' >/dev/null 2>&1; then
+    printf 'OK:   Boston Dynamics SDK (bosdyn-client) import\n'
+  else
+    printf 'FAIL: bosdyn-client is unavailable; install requirements-field.txt\n'
+    failures=$((failures + 1))
+  fi
+  check_value SPOT_IP
+fi
 
-  if [[ -f "${CALIBRATION_PATH:-}" ]]; then
-    if python3 - "${CALIBRATION_PATH}" <<'PY'
-import sys
-import yaml
-
-with open(sys.argv[1], encoding='utf-8') as stream:
-    calibration = yaml.safe_load(stream) or {}
-if calibration.get('calibrated') is not True:
-    raise SystemExit(1)
-PY
-    then
-      printf 'OK:   calibration is marked calibrated\n'
+# The EAP lidar is the backbone of the occupancy map, so a missing point
+# cloud service means no frontier exploration at all.
+if [[ "${MODE}" == "mission" || "${EAP_LIDAR:-false}" == "true" ]]; then
+  if python3 -c 'from bosdyn.client.point_cloud import PointCloudClient' \
+      >/dev/null 2>&1; then
+    printf 'OK:   Spot EAP point cloud client is importable\n'
+  else
+    printf 'FAIL: bosdyn PointCloudClient is unavailable; the EAP lidar cannot be read\n'
+    failures=$((failures + 1))
+  fi
+  if [[ -n "${SPOT_IP:-}" ]] && command -v ping >/dev/null 2>&1; then
+    if ping -c 1 -W 2 "${SPOT_IP}" >/dev/null 2>&1; then
+      printf 'OK:   Spot is reachable at %s\n' "${SPOT_IP}"
     else
-      printf 'FAIL: calibration is not marked calibrated: true\n'
+      printf 'FAIL: Spot did not answer at %s\n' "${SPOT_IP}"
       failures=$((failures + 1))
     fi
   fi
+fi
 
+if [[ "${MODE}" == "mission" || "${MODE}" == "full" ]]; then
+  check_file 'YOLO model' "${MODEL_PATH:-}"
+  check_file 'dataset configuration' "${DATASET_PATH:-}"
   if [[ -f "${DATASET_PATH:-}" ]]; then
     if python3 - "${DATASET_PATH}" <<'PY'
 import sys

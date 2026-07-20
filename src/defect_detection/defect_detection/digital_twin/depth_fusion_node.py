@@ -71,10 +71,10 @@ def project_pixel_to_camera(u, v, depth_m, camera_matrix):
     return x, y, z
 
 
-class OakDepthFusionNode(Node):
+class DepthFusionNode(Node):
 
     def __init__(self):
-        super().__init__('oak_depth_detection_fusion')
+        super().__init__('depth_detection_fusion')
 
         self.declare_parameter('detections_2d_topic', '/detections_2d')
         self.declare_parameter('depth_topic', '/oak/rgb/depth')
@@ -148,7 +148,7 @@ class OakDepthFusionNode(Node):
         self.synchronizer.registerCallback(self.synchronized_callback)
 
         self.get_logger().info(
-            'OAK-D Pro RGB-D fusion enabled. '
+            'Depth camera RGB-D fusion enabled. '
             f'detections={detections_2d_topic}, depth={depth_topic}, '
             f'camera_info={camera_info_topic}, output={detections_3d_topic}'
         )
@@ -158,13 +158,13 @@ class OakDepthFusionNode(Node):
 
     def synchronized_callback(self, detections_msg, depth_msg):
         if self.camera_matrix is None:
-            self.get_logger().warning('Waiting for OAK camera_info intrinsics')
+            self.get_logger().warning('Waiting for depth camera_info intrinsics')
             return
 
         try:
             depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
         except Exception as error:
-            self.get_logger().warning(f'Could not decode OAK depth image: {error}')
+            self.get_logger().warning(f'Could not decode the depth image: {error}')
             return
 
         depth_meters = depth_image_to_meters(depth_image, depth_msg.encoding)
@@ -225,7 +225,7 @@ class OakDepthFusionNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = OakDepthFusionNode()
+    node = DepthFusionNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
