@@ -140,6 +140,91 @@ X7 still writes a LAS file, and — exactly as in the field — nothing reads it
 back; it only stands in for the scanner's SD card. Sim state lives under
 `/tmp/synthetic_demo` and is wiped on each start.
 
+## Demo Mode
+
+```bash
+./scripts/run_field.sh demo
+```
+
+The real robot, the real localization, the real Trimble X7 — an invented site.
+`virtual_site_node` loads a predefined 3D point cloud, anchors it at the
+robot's pose when the demo launched, and plays it back as if a lidar were
+sweeping it: range-limited and occluded from the robot's live TF pose, so the
+occupancy map fills in as the robot walks and the frontier planner still has
+somewhere to go. Defects planted in the site are published as 3D detections
+once the robot is close enough and facing them, which sends it to a standoff
+pose and triggers a real X7 scan on arrival.
+
+Everything downstream is the field pipeline unmodified — same occupancy map,
+planner, mission manager, goal bridge, scan trigger, and walk home. Only the
+EAP lidar, the depth camera, and YOLO are absent.
+
+The site is a YAML file (`src/defect_detection/config/demo_site.yaml`) whose
+coordinates are metres relative to the robot at launch: `+x` ahead, `+y` left.
+It describes walls, boxes, cylinders, and ground patches that get sampled into
+a cloud, plus the defect list. Point `cloud_path:` at a `.las`/`.laz`/`.pcd`/
+`.ply` instead to demo against a real captured scan, with the defect list
+authored on top of it. Set `DEMO_SITE_PATH` in `config/field.env` to use your
+own; the rest of the `DEMO_*` settings there control sensor range, detection
+range, anchoring, and the excursion leash.
+
+> **Safety.** The occupancy map contains a site that is not there, and nothing
+> in the stack knows about anything that is. Run it in a large open area —
+> empty for the site's footprint plus `DEMO_MAX_EXCURSION_M` — with a spotter
+> on the e-stop. Spot's own onboard obstacle avoidance still runs underneath
+> the SE2 commands, but it is the only thing that does. Motion stays disabled
+> until `ROBOT_GOAL_BRIDGE=true`, as in the field.
+
+## Depth-Camera RGBD SLAM (OAK-only)
+
+```bash
+sudo apt install ros-jazzy-rtabmap-ros
+./scripts/run_field.sh slam        # or the launch file directly, below
+```
+
+The field and demo pipelines never localize *against* their map: the depth
+camera's `/oak/odom` is relayed straight to TF (`depth_localization_bridge`)
+and the occupancy grid (`pointcloud_to_occupancy`) is only *drawn from* that
+pose — open-loop dead reckoning that drifts, with `map` owned by Spot's
+vision frame. This mode is the opposite: the **OAK camera is the sole
+localization and mapping authority**. [RTAB-Map](http://introlab.github.io/rtabmap/)
+takes the RGBD stream plus `/oak/odom`, runs loop closure, and owns the whole
+transform chain, publishing its own internal map that corrects the pose:
+
+```text
+map --(rtabmap, loop-closure corrected)--> odom
+    --(depth_localization_bridge from /oak/odom)--> base_link
+    --(static extrinsics)--> oak_rgb_camera_optical_frame
+```
+
+Outputs are `/rtabmap/grid_map` (2D `OccupancyGrid`), `/rtabmap/cloud_map`
+(3D `PointCloud2`), and the loop-closure-corrected pose. The map starts empty
+at the origin on every run (`--delete_db_on_start`); clear `SLAM_RTABMAP_ARGS`
+to keep `~/.ros/rtabmap.db` and relocalize into a previously built map instead.
+
+Launch it directly to set the camera mount pose (`base_link ->` optical frame),
+which you **must** provide for your rig — the identity default produces a
+geometrically wrong map:
+
+```bash
+ros2 launch defect_detection rgbd_slam.launch.xml \
+  cam_x:=0.20 cam_z:=0.15 cam_roll:=-1.5708 cam_yaw:=-1.5708 \
+  rtabmap_viz:=true
+```
+
+The same values are available to `run_field.sh slam` as `SLAM_CAM_X`,
+`SLAM_CAM_ROLL`, … environment variables.
+
+**OAK stream requirements.** RTAB-Map reconstructs from the RGB camera model,
+so the depth image must be registered/aligned to the RGB camera
+(`setDepthAlign(RGB)` in the DepthAI pipeline), depth and RGB must share one
+resolution, RGB must be `rgb8`/`bgr8`, and `/oak/rgb/camera_info` must match
+that resolution. Misaligned depth is the most common cause of a warped map.
+
+This mode runs no Spot, no Trimble, and no YOLO, so it needs neither
+`config/field.env` nor the Boston Dynamics SDK — only `ros-jazzy-rtabmap-ros`
+and a depth camera driver publishing the `/oak/*` topics.
+
 ## Perspective Control Host
 
 ```text

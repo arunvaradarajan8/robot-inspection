@@ -2,19 +2,29 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 [mission|transport|full] [--sim gazebo|synthetic]"
+  echo "Usage: $0 [mission|demo|slam|transport|full] [--sim gazebo|synthetic]"
   echo
   echo "  mission          The field pipeline: Spot EAP lidar and the depth"
   echo "                   camera build the map, the planner visits defects"
   echo "                   first and frontiers otherwise, the Trimble X7 is"
   echo "                   triggered at each stop, and the robot walks back"
   echo "                   to its start pose before waiting for the E57."
+  echo "  slam             OAK-only depth-camera RGBD SLAM: RTAB-Map owns the"
+  echo "                   map->odom->base_link chain, building its own internal"
+  echo "                   map with loop closure from the depth camera alone."
+  echo "                   No Spot, no Trimble; starts fresh at (0,0,0)."
+  echo "  demo             The same mission on the real robot and the real"
+  echo "                   X7, but the site is invented: a predefined 3D"
+  echo "                   point cloud anchored at the robot's start pose"
+  echo "                   stands in for the lidar and the depth camera."
+  echo "                   Run it in a large, empty, open area."
   echo "  transport|full   Reduced bringup for bench work on the real robot."
   echo "  --sim gazebo     Run the same pipeline against a Gazebo simulation."
   echo "  --sim synthetic  Run against the pure-Python synthetic world (no GPU)."
   echo
   echo "Examples:"
   echo "  $0 mission                   # the field pipeline on the real robot"
+  echo "  $0 demo                      # real robot, virtual site"
   echo "  $0 mission --sim synthetic   # same loop, no hardware"
   echo "  $0 mission --sim gazebo      # same loop, simulated in Gazebo"
   exit 2
@@ -24,7 +34,7 @@ MODE="mission"
 SIM="none"
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    transport|full|mission) MODE="$1"; shift ;;
+    transport|full|mission|demo|slam) MODE="$1"; shift ;;
     # The old name for what is now the only field pipeline.
     coverage) MODE="mission"; shift ;;
     --sim) [[ $# -ge 2 ]] || usage; SIM="$2"; shift 2 ;;
@@ -49,7 +59,7 @@ if [[ -f "${FIELD_CONFIG}" ]]; then
   # shellcheck disable=SC1090
   source "${FIELD_CONFIG}"
   set +a
-elif [[ "${SIM}" == "none" ]]; then
+elif [[ "${SIM}" == "none" && "${MODE}" != "slam" ]]; then
   echo "Missing ${FIELD_CONFIG}"
   echo "Copy config/field.env.example to config/field.env and edit it."
   exit 1
@@ -111,7 +121,84 @@ if [[ "${SIM}" != "none" ]]; then
     "${MISSION_ARGS[@]}"
 fi
 
+# SLAM mode: the OAK depth camera is the whole localization and mapping
+# stack. RTAB-Map owns map->odom->base_link and builds its own internal
+# occupancy grid with loop closure. No Spot, no Trimble, no field.env.
+if [[ "${MODE}" == "slam" ]]; then
+  "${WORKSPACE_ROOT}/scripts/field_preflight.sh" slam
+
+  exec ros2 launch defect_detection rgbd_slam.launch.xml \
+    rgb_topic:="${RGB_TOPIC:-/oak/rgb/image}" \
+    depth_topic:="${DEPTH_TOPIC:-/oak/rgb/depth}" \
+    camera_info_topic:="${DEPTH_CAMERA_INFO_TOPIC:-/oak/rgb/camera_info}" \
+    odom_topic:="${DEPTH_ODOM_TOPIC:-/oak/odom}" \
+    base_frame:="${SLAM_BASE_FRAME:-base_link}" \
+    camera_optical_frame:="${SLAM_CAMERA_OPTICAL_FRAME:-oak_rgb_camera_optical_frame}" \
+    cam_x:="${SLAM_CAM_X:-0.0}" \
+    cam_y:="${SLAM_CAM_Y:-0.0}" \
+    cam_z:="${SLAM_CAM_Z:-0.0}" \
+    cam_roll:="${SLAM_CAM_ROLL:-0.0}" \
+    cam_pitch:="${SLAM_CAM_PITCH:-0.0}" \
+    cam_yaw:="${SLAM_CAM_YAW:-0.0}" \
+    rtabmap_args:="${SLAM_RTABMAP_ARGS---delete_db_on_start}" \
+    grid_resolution:="${SLAM_GRID_RESOLUTION:-0.05}" \
+    grid_range_max:="${SLAM_GRID_RANGE_MAX:-5.0}" \
+    rtabmap_viz:="${SLAM_RTABMAP_VIZ:-false}" \
+    rviz:="${ENABLE_RVIZ:-false}"
+fi
+
 "${WORKSPACE_ROOT}/scripts/field_preflight.sh" "${MODE}"
+
+# Demo mode: the robot, its localization, its motion, and the X7 are all
+# real; only the site is invented. A predefined 3D point cloud anchored
+# at the robot's start pose replaces the EAP lidar and the depth camera,
+# so the whole mission loop runs in an empty open area.
+if [[ "${MODE}" == "demo" ]]; then
+  DEMO_ROOT="${DEMO_ROOT:-/tmp/demo_site}"
+  mkdir -p "${DEMO_ROOT}"
+
+  cat <<'WARNING'
+
+  DEMO MODE
+  The occupancy map will contain a site that is not there. Nothing in
+  this stack knows about anything that actually is. Before enabling
+  motion, confirm:
+    * the area is open and empty for the site footprint plus the
+      excursion leash below;
+    * a spotter is holding the e-stop;
+    * Spot's own obstacle avoidance is enabled.
+
+WARNING
+
+  exec ros2 launch defect_detection demo_site.launch.xml \
+    site_path:="${DEMO_SITE_PATH:-$(ros2 pkg prefix defect_detection)/share/defect_detection/config/demo_site.yaml}" \
+    site_density:="${DEMO_SITE_DENSITY:-1.0}" \
+    sensor_range_m:="${DEMO_SENSOR_RANGE_M:-20.0}" \
+    detection_range_m:="${DEMO_DETECTION_RANGE_M:-8.0}" \
+    detection_fov_deg:="${DEMO_DETECTION_FOV_DEG:-90.0}" \
+    anchor_to_start_pose:="${DEMO_ANCHOR_TO_START_POSE:-true}" \
+    anchor_x:="${DEMO_ANCHOR_X:-0.0}" \
+    anchor_y:="${DEMO_ANCHOR_Y:-0.0}" \
+    anchor_yaw_deg:="${DEMO_ANCHOR_YAW_DEG:-0.0}" \
+    demo_root:="${DEMO_ROOT}" \
+    mission_max_excursion_m:="${DEMO_MAX_EXCURSION_M:-20.0}" \
+    min_scan_separation_m:="${DEMO_MIN_SCAN_SEPARATION_M:-4.0}" \
+    scan_cooldown_sec:="${DEMO_SCAN_COOLDOWN_SEC:-45.0}" \
+    spot_localization:="${SPOT_LOCALIZATION:-true}" \
+    spot_frame:="${SPOT_FRAME:-vision}" \
+    spot_ip:="${SPOT_IP:-}" \
+    spot_username:="${SPOT_USERNAME:-}" \
+    spot_password:="${SPOT_PASSWORD:-}" \
+    robot_world_frame:="${ROBOT_WORLD_FRAME:-vision}" \
+    navigation_base_frame:="${NAVIGATION_BASE_FRAME:-body}" \
+    robot_goal_bridge:="${ROBOT_GOAL_BRIDGE:-false}" \
+    robot_goal_backend:="${ROBOT_GOAL_BACKEND:-spot_sdk}" \
+    spot_command_frame:="${SPOT_COMMAND_FRAME:-vision}" \
+    trimble_windows_bridge:="${TRIMBLE_WINDOWS_BRIDGE:-true}" \
+    trimble_windows_url:="${TRIMBLE_WINDOWS_URL:-http://127.0.0.1:8765}" \
+    trimble_reference_scan_on_start:="${TRIMBLE_REFERENCE_SCAN_ON_START:-true}" \
+    rviz:="${ENABLE_RVIZ:-true}"
+fi
 
 detector=false
 depth_navigation="${DEPTH_NAVIGATION:-false}"

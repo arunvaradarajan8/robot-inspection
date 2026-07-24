@@ -1,0 +1,92 @@
+# The virtual site for demo mode: a bridge abutment the robot believes
+# it is inspecting while it actually walks an empty field.
+#
+# Coordinates are metres in the robot's own frame at the moment the demo
+# launched: +x ahead of the robot, +y to its left, +z up. Anchoring is
+# handled by virtual_site_node, so this file never needs site survey
+# coordinates.
+#
+# Scale check before running: the geometry below spans roughly 26 m x 26 m
+# and the mission walks a standoff distance from each defect. Pick an open
+# area at least that large with nothing in it, and keep MISSION_MAX_
+# EXCURSION_M below the distance to the nearest real obstacle.
+
+name: demo bridge abutment
+
+# Sensor noise applied to every sampled point, so the occupancy map sees
+# a surface with thickness rather than a mathematically perfect plane.
+surface_noise_m: 0.01
+
+surfaces:
+  # The abutment face, 12 m ahead and spanning the robot's width of view.
+  - type: wall
+    x: 12.0
+    y: [-10.0, 10.0]
+    height: 4.0
+    thickness: 0.4
+
+  # A return wall down the left side, so the site is a corner rather than
+  # a single plane and the frontier planner has to turn to finish it.
+  - type: wall
+    x: 2.0
+    y: [9.6, 10.0]
+    height: 4.0
+    thickness: 10.0
+
+  # Support pillars in front of the face: real obstacles for the map that
+  # the robot has to route around, in a field where nothing is there.
+  - type: cylinder
+    center: [9.5, -6.0]
+    radius: 0.4
+    height: 3.5
+  - type: cylinder
+    center: [9.5, 0.0]
+    radius: 0.4
+    height: 3.5
+  - type: cylinder
+    center: [9.5, 6.0]
+    radius: 0.4
+    height: 3.5
+
+  # A pier cap block off to the right.
+  - type: box
+    center: [6.0, -8.0, 0.8]
+    size: [2.0, 1.5, 1.6]
+
+  # Ground, mostly so the site reads correctly in RViz. It is sampled
+  # sparsely and the occupancy map's height band filters it out.
+  - type: ground
+    x: [-6.0, 14.0]
+    y: [-13.0, 13.0]
+
+# Each defect becomes a 3D detection when the robot is within
+# detection_range_m and facing it. The planner walks to a standoff pose
+# in front of it and the X7 is triggered on arrival.
+defects:
+  - class_id: crack
+    position: [11.9, -3.0, 1.6]
+    size: 0.55
+    confidence: 0.88
+  - class_id: spalling
+    position: [11.9, 2.5, 1.1]
+    size: 0.60
+    confidence: 0.82
+  - class_id: exposed_rebar
+    position: [11.9, 7.5, 2.1]
+    size: 0.45
+    confidence: 0.71
+  - class_id: corrosion
+    position: [9.5, -5.6, 1.4]
+    size: 0.35
+    confidence: 0.76
+
+# To demo against a real captured scan instead of the primitives above,
+# delete "surfaces" and point at the file (relative to this YAML):
+#
+#   cloud_path: scans/pier_3.las      # .las/.laz/.pcd/.ply
+#   cloud_max_points: 400000
+#   cloud_transform:
+#     translation: [0.0, 0.0, 0.0]    # move it relative to the robot
+#     yaw_deg: 0.0
+#
+# The defect list still applies, in the same robot-relative coordinates.

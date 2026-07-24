@@ -37,9 +37,46 @@ check_file() {
   fi
 }
 
+# SLAM mode is self-contained: the OAK depth camera plus RTAB-Map, with no
+# Spot, no Trimble, and no YOLO. Check only what that path needs, then stop
+# before the Spot/Trimble/webcam checks that do not apply.
+if [[ "${MODE}" == "slam" ]]; then
+  if ros2 pkg prefix rtabmap_slam >/dev/null 2>&1; then
+    printf 'OK:   rtabmap_slam is installed\n'
+  else
+    printf 'FAIL: rtabmap_slam not found; install ros-jazzy-rtabmap-ros\n'
+    failures=$((failures + 1))
+  fi
+  if python3 -c 'import rclpy' >/dev/null 2>&1; then
+    printf 'OK:   ROS Python (rclpy) import\n'
+  else
+    printf 'FAIL: rclpy is unavailable\n'
+    failures=$((failures + 1))
+  fi
+  # The OAK driver may still be starting, so a missing topic is a warning,
+  # not a failure: the operator can launch the driver and SLAM in any order.
+  for topic in "${RGB_TOPIC:-/oak/rgb/image}" \
+               "${DEPTH_TOPIC:-/oak/rgb/depth}" \
+               "${DEPTH_CAMERA_INFO_TOPIC:-/oak/rgb/camera_info}" \
+               "${DEPTH_ODOM_TOPIC:-/oak/odom}"; do
+    if ros2 topic list 2>/dev/null | grep -qx "${topic}"; then
+      printf 'OK:   OAK topic advertised: %s\n' "${topic}"
+    else
+      printf 'WARN: OAK topic not yet advertised: %s\n' "${topic}"
+    fi
+  done
+  if ((failures > 0)); then
+    printf '\nPreflight failed with %d problem(s).\n' "${failures}"
+    exit 1
+  fi
+  printf '\nPreflight passed for slam mode.\n'
+  exit 0
+fi
+
 # Mission mode expects a depth camera driver publishing over ROS rather
-# than a local V4L webcam, so the /dev/video check does not apply.
-if [[ "${MODE}" != "mission" ]]; then
+# than a local V4L webcam, so the /dev/video check does not apply. Demo
+# mode runs no camera at all.
+if [[ "${MODE}" != "mission" && "${MODE}" != "demo" ]]; then
   camera_index="${CAMERA_INDEX:-0}"
   if [[ -e "/dev/video${camera_index}" ]]; then
     printf 'OK:   webcam device: /dev/video%s\n' "${camera_index}"
@@ -65,7 +102,9 @@ else
 fi
 
 needs_spot_sdk=false
-if [[ "${MODE}" == "mission" ]]; then
+# Demo mode invents the site but drives the real robot, so it needs the
+# SDK exactly as the field mission does.
+if [[ "${MODE}" == "mission" || "${MODE}" == "demo" ]]; then
   needs_spot_sdk=true
 fi
 if [[ "${ROBOT_GOAL_BACKEND:-}" == "spot_sdk" ||
@@ -93,6 +132,48 @@ if [[ "${MODE}" == "mission" || "${EAP_LIDAR:-false}" == "true" ]]; then
   else
     printf 'FAIL: bosdyn PointCloudClient is unavailable; the EAP lidar cannot be read\n'
     failures=$((failures + 1))
+  fi
+  if [[ -n "${SPOT_IP:-}" ]] && command -v ping >/dev/null 2>&1; then
+    if ping -c 1 -W 2 "${SPOT_IP}" >/dev/null 2>&1; then
+      printf 'OK:   Spot is reachable at %s\n' "${SPOT_IP}"
+    else
+      printf 'FAIL: Spot did not answer at %s\n' "${SPOT_IP}"
+      failures=$((failures + 1))
+    fi
+  fi
+fi
+
+# Demo mode: no model and no sensors to check, but the virtual site has
+# to parse before the robot is standing in a field waiting for it.
+if [[ "${MODE}" == "demo" ]]; then
+  demo_site_path="${DEMO_SITE_PATH:-}"
+  if [[ -z "${demo_site_path}" ]]; then
+    demo_site_path="$(
+      ros2 pkg prefix defect_detection 2>/dev/null
+    )/share/defect_detection/config/demo_site.yaml"
+  fi
+  check_file 'virtual site' "${demo_site_path}"
+  if [[ -f "${demo_site_path}" ]]; then
+    if site_summary=$(python3 - "${demo_site_path}" <<'PY'
+import sys
+
+from defect_detection.simulation.virtual_site import load_site
+
+site = load_site(sys.argv[1])
+if not len(site.points):
+    raise SystemExit(1)
+print(
+    f'"{site.name}": {len(site.points)} points, '
+    f'{len(site.defects)} planted defects'
+)
+PY
+    )
+    then
+      printf 'OK:   virtual site %s\n' "${site_summary}"
+    else
+      printf 'FAIL: virtual site failed to load\n'
+      failures=$((failures + 1))
+    fi
   fi
   if [[ -n "${SPOT_IP:-}" ]] && command -v ping >/dev/null 2>&1; then
     if ping -c 1 -W 2 "${SPOT_IP}" >/dev/null 2>&1; then

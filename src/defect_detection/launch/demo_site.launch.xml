@@ -1,0 +1,177 @@
+<?xml version="1.0"?>
+<!--
+  Demo mode: the real robot, the real Trimble X7, an invented site.
+
+  Everything that touches hardware is the field pipeline unchanged -
+  Spot's vision-frame localization, the SE2 goal bridge, the Windows
+  Perspective bridge triggering the X7, the mission manager walking the
+  robot home. Only perception is replaced: instead of the EAP lidar and
+  the depth camera, virtual_site_node plays back a predefined 3D point
+  cloud anchored at the robot's pose when the demo launched, and publishes
+  the defects planted in it as 3D detections.
+
+    ros2 launch defect_detection demo_site.launch.xml \
+      spot_ip:=192.168.80.3 robot_goal_bridge:=true
+
+  Or, with config/field.env filled in:
+
+    ./scripts/run_field.sh demo
+
+  SAFETY: the occupancy map contains nothing that is actually there. Run
+  this in a large open area, empty for at least the site's own footprint
+  plus mission_max_excursion_m, with a spotter on the e-stop. Spot's own
+  onboard obstacle avoidance still runs underneath the SE2 commands, but
+  nothing in this stack knows about a real obstacle.
+-->
+<launch>
+  <arg name="site_path"
+       default="$(find-pkg-share defect_detection)/config/demo_site.yaml"
+       description="YAML describing the virtual site and its defects."/>
+  <arg name="site_density" default="1.0"
+       description="Scales how densely the site's surfaces are sampled."/>
+  <arg name="demo_cloud_topic" default="/demo/points"
+       description="Where the virtual site is played back. It feeds the
+                    occupancy map through the EAP source."/>
+  <arg name="sensor_range_m" default="20.0"
+       description="How far the simulated lidar sees into the virtual site."/>
+  <arg name="detection_range_m" default="8.0"
+       description="How close the robot must be to 'detect' a defect."/>
+  <arg name="detection_fov_deg" default="90.0"/>
+  <arg name="anchor_to_start_pose" default="true"
+       description="Place the site at the robot's pose when the demo
+                    started; otherwise use anchor_x/anchor_y/anchor_yaw_deg
+                    in the map frame."/>
+  <arg name="anchor_x" default="0.0"/>
+  <arg name="anchor_y" default="0.0"/>
+  <arg name="anchor_yaw_deg" default="0.0"/>
+
+  <arg name="publish_map_anchor" default="true"
+       description="Publish map -> robot_world_frame as identity. The
+                    demo's site coordinates and the robot's world frame
+                    are then the same frame."/>
+  <arg name="robot_world_frame" default="vision"/>
+  <arg name="navigation_base_frame" default="body"/>
+
+  <arg name="spot_localization" default="true"
+       description="Real Spot localization. This is what the demo is for;
+                    turn it off only to bench-test the virtual site."/>
+  <arg name="spot_ip" default=""/>
+  <arg name="spot_username" default=""/>
+  <arg name="spot_password" default=""/>
+  <arg name="spot_frame" default="vision"/>
+  <arg name="robot_goal_bridge" default="false"
+       description="Keep false until an operator allows the payload to
+                    command motion in the demo area."/>
+  <arg name="robot_goal_backend" default="spot_sdk"/>
+  <arg name="spot_command_frame" default="vision"/>
+  <arg name="trimble_windows_bridge" default="true"
+       description="Trigger the real X7 at every stop, exactly as in the
+                    field. The scans stay on the scanner's SD card."/>
+  <arg name="trimble_windows_url" default="http://127.0.0.1:8765"/>
+  <arg name="trimble_reference_scan_on_start" default="true"/>
+
+  <arg name="demo_root" default="/tmp/demo_site"
+       description="Scratch directory for the defect store and summary."/>
+  <arg name="mission_max_excursion_m" default="20.0"
+       description="Hard leash on how far the robot may walk from its
+                    start pose. Keep it inside the clear area."/>
+  <arg name="min_scan_separation_m" default="4.0"/>
+  <arg name="scan_cooldown_sec" default="45.0"/>
+  <arg name="rviz" default="true"/>
+
+  <!-- The stack navigates in 'map'; Spot localizes in its own world
+       frame. In demo mode the site is anchored to the robot itself, so
+       the two frames coincide and this is an identity transform. -->
+  <node if="$(var publish_map_anchor)"
+        pkg="tf2_ros"
+        exec="static_transform_publisher"
+        name="demo_map_anchor"
+        args="--frame-id map --child-frame-id $(var robot_world_frame)"
+        output="screen"/>
+
+  <node pkg="defect_detection"
+        exec="virtual_site_node"
+        name="virtual_site_node"
+        output="screen">
+    <param name="site_path" value="$(var site_path)"/>
+    <param name="site_density" value="$(var site_density)"/>
+    <param name="cloud_topic" value="$(var demo_cloud_topic)"/>
+    <param name="detections_3d_topic" value="/detections_3d"/>
+    <param name="target_frame" value="map"/>
+    <param name="base_frame" value="$(var navigation_base_frame)"/>
+    <param name="anchor_to_start_pose" value="$(var anchor_to_start_pose)"/>
+    <param name="anchor_x" value="$(var anchor_x)"/>
+    <param name="anchor_y" value="$(var anchor_y)"/>
+    <param name="anchor_yaw_deg" value="$(var anchor_yaw_deg)"/>
+    <param name="sensor_range_m" value="$(var sensor_range_m)"/>
+    <param name="detection_range_m" value="$(var detection_range_m)"/>
+    <param name="detection_fov_deg" value="$(var detection_fov_deg)"/>
+  </node>
+
+  <include file="$(find-pkg-share defect_detection)/launch/defect_detection.launch.xml">
+    <!-- No site sensors at all: the virtual site replaces every one of
+         them. YOLO and the depth fusion have no images to work on. -->
+    <arg name="publish_camera" value="false"/>
+    <arg name="detector" value="false"/>
+    <arg name="depth_navigation" value="false"/>
+    <arg name="depth_localization" value="false"/>
+    <arg name="eap_lidar" value="false"/>
+    <arg name="map_depth_enabled" value="false"/>
+
+    <!-- The virtual site enters the map where the EAP lidar normally
+         would: same accumulated grid, same raytrace from the robot pose. -->
+    <arg name="digital_twin_map" value="true"/>
+    <arg name="map_eap_enabled" value="true"/>
+    <arg name="map_eap_topic" value="$(var demo_cloud_topic)"/>
+    <arg name="map_eap_max_range_m" value="$(var sensor_range_m)"/>
+    <arg name="digital_twin_accumulate" value="true"/>
+    <arg name="digital_twin_use_tf_scan_origin" value="true"/>
+
+    <!-- Real localization, real motion, real scanner. -->
+    <arg name="spot_localization" value="$(var spot_localization)"/>
+    <arg name="spot_frame" value="$(var spot_frame)"/>
+    <arg name="spot_ip" value="$(var spot_ip)"/>
+    <arg name="spot_username" value="$(var spot_username)"/>
+    <arg name="spot_password" value="$(var spot_password)"/>
+    <arg name="robot_world_frame" value="$(var robot_world_frame)"/>
+    <arg name="navigation_base_frame" value="$(var navigation_base_frame)"/>
+    <arg name="arrival_base_frame" value="$(var navigation_base_frame)"/>
+    <arg name="robot_goal_bridge" value="$(var robot_goal_bridge)"/>
+    <arg name="robot_goal_backend" value="$(var robot_goal_backend)"/>
+    <arg name="spot_command_frame" value="$(var spot_command_frame)"/>
+    <arg name="trimble_windows_bridge" value="$(var trimble_windows_bridge)"/>
+    <arg name="trimble_windows_url" value="$(var trimble_windows_url)"/>
+    <arg name="trimble_reference_scan_on_start"
+         value="$(var trimble_reference_scan_on_start)"/>
+    <!-- There is no camera in demo mode, so the bridge has no preview
+         frames to forward to the Windows app. -->
+    <arg name="trimble_camera_preview" value="false"/>
+
+    <!-- Mission logic under test, unchanged from the field. -->
+    <arg name="scan_decision" value="true"/>
+    <arg name="scan_mode" value="coverage"/>
+    <arg name="scan_cooldown_sec" value="$(var scan_cooldown_sec)"/>
+    <arg name="min_scan_separation_m" value="$(var min_scan_separation_m)"/>
+    <arg name="infrastructure_planner" value="true"/>
+    <arg name="prefer_defect_rescans" value="true"/>
+    <arg name="planner_hold_for_scan" value="true"/>
+    <arg name="mission_manager" value="true"/>
+    <arg name="mission_max_excursion_m" value="$(var mission_max_excursion_m)"/>
+    <arg name="mission_summary_path" value="$(var demo_root)/mission.yaml"/>
+    <arg name="defect_map" value="true"/>
+    <arg name="defect_map_store_path" value="$(var demo_root)/defects.yaml"/>
+    <arg name="frame_anchor" value="false"/>
+
+    <arg name="visualization" value="true"/>
+    <arg name="pointcloud_topic" value="$(var demo_cloud_topic)"/>
+    <!-- The demo ships the synthetic layout below. -->
+    <arg name="rviz" value="false"/>
+  </include>
+
+  <node if="$(var rviz)"
+        pkg="rviz2"
+        exec="rviz2"
+        name="rviz2"
+        args="-d $(find-pkg-share defect_detection)/config/synthetic_demo.rviz"
+        output="screen"/>
+</launch>

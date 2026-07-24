@@ -76,6 +76,8 @@ setup(
             'defect_detection.simulation.sim_scan_node:main',
             'goal_driver_node = '
             'defect_detection.simulation.goal_driver_node:main',
+            'virtual_site_node = '
+            'defect_detection.simulation.virtual_site_node:main',
         ],
     },
 )

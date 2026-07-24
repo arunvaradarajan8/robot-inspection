@@ -1,0 +1,151 @@
+<?xml version="1.0"?>
+<!--
+  Depth-camera RGBD SLAM (OAK-only).
+
+  Unlike the field pipeline - where 'map' belongs to Spot's vision-frame
+  localization and the depth camera only decorates an occupancy grid - this
+  mode makes the OAK camera the sole localization and mapping authority.
+  RTAB-Map (rtabmap_ros) closes the loop the old stack never did: it takes
+  the RGBD stream plus the camera's own /oak/odom, runs loop closure, and
+  owns the full map -> odom -> base_link chain, publishing its own internal
+  occupancy grid and 3D cloud. The map starts empty at (0, 0, 0) on every
+  launch.
+
+      ros2 launch defect_detection rgbd_slam.launch.xml \
+        cam_x:=0.20 cam_z:=0.15 cam_roll:=-1.5708 cam_yaw:=-1.5708
+
+  Requires the rtabmap_ros packages:  sudo apt install ros-jazzy-rtabmap-ros
+
+  OAK stream requirements (see README): depth must be registered/aligned to
+  the RGB camera, depth and RGB at the same resolution, RGB in rgb8/bgr8,
+  and camera_info matching that resolution. If depth is not aligned to the
+  RGB intrinsics the reconstructed map is geometrically wrong.
+
+  TF chain produced here:
+    map  ->[rtabmap, loop-closure corrected]  odom
+    odom ->[depth_localization_bridge, /oak/odom]  base_link
+    base_link ->[static extrinsics]  camera optical frame
+-->
+<launch>
+  <!-- OAK RGBD inputs. Defaults match the topic names used across the repo. -->
+  <arg name="rgb_topic" default="/oak/rgb/image"/>
+  <arg name="depth_topic" default="/oak/rgb/depth"/>
+  <arg name="camera_info_topic" default="/oak/rgb/camera_info"/>
+  <arg name="odom_topic" default="/oak/odom"
+       description="The OAK driver's visual odometry, used as RTAB-Map's
+                    motion input. RTAB-Map adds loop closure on top."/>
+
+  <!-- Frames. -->
+  <arg name="map_frame" default="map"/>
+  <arg name="odom_frame" default="odom"/>
+  <arg name="base_frame" default="base_link"/>
+  <arg name="camera_optical_frame" default="oak_rgb_camera_optical_frame"
+       description="Frame the OAK RGB/depth images are stamped in."/>
+
+  <!-- Camera mount on the robot: base_frame -> camera_optical_frame.
+       MUST be set for your rig; identity here is only a placeholder that
+       will produce a wrong map. Translation is in metres, rotation in
+       radians. A forward-facing OAK optical frame is typically
+       roll=-pi/2, yaw=-pi/2 relative to a REP-103 base_link. -->
+  <arg name="cam_x" default="0.0"/>
+  <arg name="cam_y" default="0.0"/>
+  <arg name="cam_z" default="0.0"/>
+  <arg name="cam_roll" default="0.0"/>
+  <arg name="cam_pitch" default="0.0"/>
+  <arg name="cam_yaw" default="0.0"/>
+
+  <!-- Depth localization bridge: publishes odom -> base_link from /oak/odom.
+       Turn off if the OAK driver already broadcasts that TF itself. -->
+  <arg name="publish_odom_tf" default="true"/>
+
+  <!-- RTAB-Map behaviour. -->
+  <arg name="rtabmap_args" default="--delete_db_on_start"
+       description="Passed to the rtabmap node. The default starts from an
+                    empty map at (0,0,0) every run. Clear it (rtabmap_args:='')
+                    to keep ~/.ros/rtabmap.db and relocalize into it."/>
+  <arg name="approx_sync" default="true"
+       description="OAK RGB and depth are rarely stamped identically; approx
+                    time sync tolerates the offset."/>
+  <arg name="queue_size" default="30"/>
+  <arg name="grid_resolution" default="0.05"/>
+  <arg name="grid_range_max" default="5.0"
+       description="Beyond a few metres OAK stereo depth is too noisy to map."/>
+  <arg name="grid_max_obstacle_height" default="1.20"/>
+  <arg name="grid_max_ground_height" default="0.10"/>
+
+  <!-- Visualization. Off by default for headless field/Jetson use. -->
+  <arg name="rtabmap_viz" default="false"/>
+  <arg name="rviz" default="false"/>
+
+  <!-- base_link -> camera optical frame (the camera's mount pose). -->
+  <node pkg="tf2_ros"
+        exec="static_transform_publisher"
+        name="oak_camera_extrinsics"
+        args="--x $(var cam_x) --y $(var cam_y) --z $(var cam_z)
+              --roll $(var cam_roll) --pitch $(var cam_pitch) --yaw $(var cam_yaw)
+              --frame-id $(var base_frame)
+              --child-frame-id $(var camera_optical_frame)"
+        output="screen"/>
+
+  <!-- odom -> base_link, relayed from the OAK camera's own VIO. -->
+  <node if="$(var publish_odom_tf)"
+        pkg="defect_detection"
+        exec="depth_localization_bridge"
+        name="depth_localization_bridge"
+        output="screen">
+    <param name="odom_topic" value="$(var odom_topic)"/>
+    <param name="odom_frame" value="$(var odom_frame)"/>
+    <param name="base_frame" value="$(var base_frame)"/>
+    <!-- Normalize to odom -> base_link regardless of the driver's own
+         frame ids, and keep full 3D from the camera VIO. -->
+    <param name="use_message_frame_ids" value="false"/>
+    <param name="zero_z" value="false"/>
+  </node>
+
+  <!-- The SLAM core: loop closure, map -> odom, grid + cloud. -->
+  <node pkg="rtabmap_slam"
+        exec="rtabmap"
+        name="rtabmap"
+        output="screen"
+        args="$(var rtabmap_args)">
+    <param name="frame_id" value="$(var base_frame)"/>
+    <param name="map_frame_id" value="$(var map_frame)"/>
+    <param name="odom_frame_id" value="$(var odom_frame)"/>
+    <param name="subscribe_depth" value="true"/>
+    <param name="subscribe_rgb" value="true"/>
+    <param name="subscribe_scan" value="false"/>
+    <param name="approx_sync" value="$(var approx_sync)"/>
+    <param name="queue_size" value="$(var queue_size)"/>
+    <!-- 2D projection of the SLAM map for downstream planners / RViz. -->
+    <param name="Grid/CellSize" value="$(var grid_resolution)"/>
+    <param name="Grid/RangeMax" value="$(var grid_range_max)"/>
+    <param name="Grid/MaxObstacleHeight" value="$(var grid_max_obstacle_height)"/>
+    <param name="Grid/MaxGroundHeight" value="$(var grid_max_ground_height)"/>
+
+    <remap from="rgb/image" to="$(var rgb_topic)"/>
+    <remap from="rgb/camera_info" to="$(var camera_info_topic)"/>
+    <remap from="depth/image" to="$(var depth_topic)"/>
+    <remap from="odom" to="$(var odom_topic)"/>
+  </node>
+
+  <node if="$(var rtabmap_viz)"
+        pkg="rtabmap_viz"
+        exec="rtabmap_viz"
+        name="rtabmap_viz"
+        output="screen">
+    <param name="frame_id" value="$(var base_frame)"/>
+    <param name="subscribe_depth" value="true"/>
+    <param name="subscribe_rgb" value="true"/>
+    <param name="approx_sync" value="$(var approx_sync)"/>
+    <remap from="rgb/image" to="$(var rgb_topic)"/>
+    <remap from="rgb/camera_info" to="$(var camera_info_topic)"/>
+    <remap from="depth/image" to="$(var depth_topic)"/>
+    <remap from="odom" to="$(var odom_topic)"/>
+  </node>
+
+  <node if="$(var rviz)"
+        pkg="rviz2"
+        exec="rviz2"
+        name="rviz2"
+        output="screen"/>
+</launch>
