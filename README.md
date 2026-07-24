@@ -1,4 +1,4 @@
-# Infrastructure Defect Detection
+# Autonomous Infrastructure Inspection
 
 ROS 2 workspace for autonomous infrastructure inspection on Boston Dynamics
 Spot: the robot explores a site on its own, walks up to defects it spots,
