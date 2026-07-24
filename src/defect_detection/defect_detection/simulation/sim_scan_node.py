@@ -29,7 +29,7 @@ class SimScanNode(Node):
         self.declare_parameter('scan_topic', '/trimble/x7/scan_points')
         self.declare_parameter('scan_directory', '/tmp/synthetic_demo/trimble_scans')
         self.declare_parameter('scan_frame', 'map')
-        self.declare_parameter('pointcloud_topic', '/lidar/points')
+        self.declare_parameter('pointcloud_topic', '/cloud/points')
         self.declare_parameter('ambient_cloud_frame', 'odom')
         self.declare_parameter('scan_write_delay_sec', 2.0)
 

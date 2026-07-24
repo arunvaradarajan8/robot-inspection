@@ -1,0 +1,79 @@
+<?xml version="1.0"?>
+<!--
+  Fused localization only: Spot vision pose + navX IMU + depth-camera VIO,
+  blended by a robot_localization EKF into one vision -> body transform.
+
+  Brings up just the localization nodes (no YOLO, map, planner, or Trimble)
+  so the fused estimate and the TF tree can be verified before wiring it
+  into a full mission. Once it checks out, enable it in the mission with
+  FUSED_LOCALIZATION=true in config/field.env.
+
+    ros2 launch defect_detection fused_localization.launch.xml \
+      spot_ip:=192.168.80.3 navx_mode:=serial navx_serial_port:=/dev/ttyACM0
+
+  Verify with:
+    ros2 topic echo /navx/imu
+    ros2 topic echo /odometry/filtered
+    ros2 run tf2_tools view_frames
+
+  Needs ros-jazzy-robot-localization. For serial navX also needs pyserial
+  and the navX streaming its ASCII 'y' sentence.
+-->
+<launch>
+  <arg name="spot_ip" default=""/>
+  <arg name="spot_username" default=""/>
+  <arg name="spot_password" default=""/>
+  <arg name="spot_frame" default="vision"
+       description="'vision' is drift-corrected; 'odom' is smooth but drifts."/>
+  <arg name="fused_world_frame" default="vision"/>
+  <arg name="navigation_base_frame" default="body"/>
+
+  <arg name="navx_mode" default="relay"
+       description="'relay' republishes an existing Imu topic; 'serial' reads a navX over a port."/>
+  <arg name="navx_imu_topic" default="/navx/imu"/>
+  <arg name="navx_input_imu_topic" default="/navx/imu_raw"/>
+  <arg name="navx_serial_port" default="/dev/ttyACM0"/>
+  <arg name="navx_serial_baud" default="115200"/>
+
+  <arg name="depth_odom_topic" default="/oak/odom"
+       description="Depth-camera visual-odometry topic fed to the EKF."/>
+  <arg name="spot_odom_topic" default="/spot/odom"/>
+  <arg name="ekf_config"
+       default="$(find-pkg-share defect_detection)/config/ekf.yaml"/>
+
+  <!-- Reuse the mission launch, but only its localization nodes. The Spot
+       bridge streams odometry (publish_tf=false); the EKF owns the TF. -->
+  <include file="$(find-pkg-share defect_detection)/launch/defect_detection.launch.xml">
+    <arg name="publish_camera" value="false"/>
+    <arg name="detector" value="false"/>
+    <arg name="depth_navigation" value="false"/>
+    <arg name="visualization" value="false"/>
+    <arg name="infrastructure_planner" value="false"/>
+    <arg name="digital_twin_map" value="false"/>
+    <arg name="scan_decision" value="false"/>
+    <arg name="mission_manager" value="false"/>
+    <arg name="defect_map" value="false"/>
+
+    <arg name="spot_localization" value="true"/>
+    <arg name="spot_frame" value="$(var spot_frame)"/>
+    <arg name="spot_ip" value="$(var spot_ip)"/>
+    <arg name="spot_username" value="$(var spot_username)"/>
+    <arg name="spot_password" value="$(var spot_password)"/>
+    <arg name="spot_odom_topic" value="$(var spot_odom_topic)"/>
+    <arg name="robot_world_frame" value="$(var fused_world_frame)"/>
+    <arg name="navigation_base_frame" value="$(var navigation_base_frame)"/>
+
+    <arg name="spot_publish_tf" value="false"/>
+    <arg name="fused_localization" value="true"/>
+    <arg name="fused_world_frame" value="$(var fused_world_frame)"/>
+    <arg name="ekf_config" value="$(var ekf_config)"/>
+    <arg name="depth_odom_topic" value="$(var depth_odom_topic)"/>
+
+    <arg name="navx_imu" value="true"/>
+    <arg name="navx_mode" value="$(var navx_mode)"/>
+    <arg name="navx_imu_topic" value="$(var navx_imu_topic)"/>
+    <arg name="navx_input_imu_topic" value="$(var navx_input_imu_topic)"/>
+    <arg name="navx_serial_port" value="$(var navx_serial_port)"/>
+    <arg name="navx_serial_baud" value="$(var navx_serial_baud)"/>
+  </include>
+</launch>

@@ -3,7 +3,7 @@
 The robot, its localization, its motion, and the Trimble X7 are all real;
 only what the robot perceives is invented. The node anchors a virtual
 site at the robot's pose when the demo starts, then plays that site back
-as if a lidar were sweeping it - range-limited and occluded from the
+as if a sensor were sweeping it - range-limited and occluded from the
 robot's live TF pose - so the occupancy map fills in as the robot walks
 and the frontier planner has somewhere to go. Planted defects are
 published as 3D detections once the robot is close enough and facing
@@ -62,7 +62,7 @@ class VirtualSiteNode(Node):
         self.declare_parameter('anchor_x', 0.0)
         self.declare_parameter('anchor_y', 0.0)
         self.declare_parameter('anchor_yaw_deg', 0.0)
-        # Simulated lidar.
+        # Simulated depth sensor.
         self.declare_parameter('publish_rate_hz', 2.0)
         self.declare_parameter('sensor_range_m', 20.0)
         self.declare_parameter('bearing_bin_deg', 0.4)
@@ -204,7 +204,7 @@ class VirtualSiteNode(Node):
         )
         return True
 
-    # ---- simulated lidar ------------------------------------------------
+    # ---- simulated sensor ------------------------------------------------
 
     def publish_sweep(self):
         pose = self.robot_pose()

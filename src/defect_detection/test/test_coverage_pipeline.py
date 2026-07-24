@@ -109,19 +109,19 @@ def test_occupancy_accumulation_keeps_walls_from_earlier_stations():
         node.use_tf_scan_origin = False
         published = []
         node.publisher = SimpleNamespace(publish=published.append)
-        eap = source_named(node, 'eap')
+        cloud = source_named(node, 'cloud')
 
         # Station 1 at the configured origin sees a wall at x=2.
         wall_one = [(2.0, y / 10.0, 0.5) for y in range(-10, 11)]
-        node.cloud_callback(eap, make_cloud(wall_one))
+        node.cloud_callback(cloud, make_cloud(wall_one))
         assert len(published) == 1
         assert grid_value_at(published[0], 2.0, 0.0) == OCCUPIED
 
         # Station 2 further along sees a different wall at x=8.
         node.scan_origin_x = 6.0
-        eap.last_update = 0.0
+        cloud.last_update = 0.0
         wall_two = [(8.0, y / 10.0, 0.5) for y in range(-10, 11)]
-        node.cloud_callback(eap, make_cloud(wall_two))
+        node.cloud_callback(cloud, make_cloud(wall_two))
         assert len(published) == 2
 
         merged = published[1]
@@ -134,8 +134,8 @@ def test_occupancy_accumulation_keeps_walls_from_earlier_stations():
         rclpy.shutdown()
 
 
-def test_depth_rays_do_not_erase_lidar_walls():
-    """A near-field depth ray must not punch through a wall the lidar saw."""
+def test_depth_rays_do_not_erase_cloud_walls():
+    """A near-field depth ray must not punch through a wall the cloud source saw."""
     os.environ['ROS_LOG_DIR'] = '/tmp'
     rclpy.init()
     node = PointCloudToOccupancy()
@@ -143,12 +143,12 @@ def test_depth_rays_do_not_erase_lidar_walls():
         node.use_tf_scan_origin = False
         published = []
         node.publisher = SimpleNamespace(publish=published.append)
-        eap = source_named(node, 'eap')
+        cloud = source_named(node, 'cloud')
         depth = source_named(node, 'depth')
 
-        # The lidar sees a wall at x=2.
+        # The long-range cloud source sees a wall at x=2.
         node.cloud_callback(
-            eap,
+            cloud,
             make_cloud([(2.0, y / 10.0, 0.5) for y in range(-10, 11)]),
         )
         assert grid_value_at(published[-1], 2.0, 0.0) == OCCUPIED
@@ -177,7 +177,7 @@ def test_either_sensor_clears_unknown_so_it_stops_being_a_frontier():
         node.publisher = SimpleNamespace(publish=published.append)
         depth = source_named(node, 'depth')
 
-        # Only the depth camera observes this patch; the lidar never does.
+        # Only the depth camera observes this patch; the cloud source never does.
         node.cloud_callback(
             depth,
             make_cloud([(3.0, y / 10.0, 0.5) for y in range(-5, 6)]),
@@ -197,8 +197,8 @@ def test_decimation_respects_the_per_source_budget():
     rclpy.init()
     node = PointCloudToOccupancy()
     try:
-        eap = source_named(node, 'eap')
-        eap.max_points = 50
+        cloud = source_named(node, 'cloud')
+        cloud.max_points = 50
         points = np.column_stack(
             [
                 np.linspace(1.0, 20.0, 5000),
@@ -206,8 +206,8 @@ def test_decimation_respects_the_per_source_budget():
                 np.full(5000, 0.5),
             ]
         )
-        kept = node.filter_points(eap, points, 0.0, 0.0)
-        assert len(kept) <= eap.max_points
+        kept = node.filter_points(cloud, points, 0.0, 0.0)
+        assert len(kept) <= cloud.max_points
         # A uniform stride keeps both ends of the scan, unlike truncation.
         assert kept[0][0] < 2.0
         assert kept[-1][0] > 18.0

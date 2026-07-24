@@ -2,3 +2,6 @@ ultralytics>=8.4,<9
 laspy>=2.5,<3
 lazrs>=0.6,<1
 bosdyn-client
+# Only for fused localization with navx_mode:=serial (reads the navX over
+# USB/UART). Not needed for relay mode or if fused localization is off.
+pyserial>=3.5,<4

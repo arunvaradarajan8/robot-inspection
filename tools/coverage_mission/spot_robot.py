@@ -1,7 +1,7 @@
 """Thin Boston Dynamics SDK wrapper for the coverage mission.
 
-Localization comes from Spot's own kinematic state (the EAP feeds the
-robot's onboard perception): poses are read in the `vision` or `odom`
+Localization comes from Spot's own kinematic state: poses are read in
+the `vision` or `odom`
 frame from the frame-tree snapshot, and goals are sent as SE2
 trajectory commands in that same frame. Spot's onboard obstacle
 avoidance handles the local path.

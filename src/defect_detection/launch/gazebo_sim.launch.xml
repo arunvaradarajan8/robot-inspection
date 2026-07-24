@@ -83,9 +83,10 @@
     <arg name="trimble_scan_watcher" value="false"/>
     <arg name="trimble_scan_directory" value="$(var demo_root)/trimble_scans"/>
     <arg name="digital_twin_map" value="true"/>
-    <!-- The simulated depth cloud stands in for the EAP lidar; Gazebo has
+    <!-- The simulated cloud feeds the long-range cloud source; Gazebo has
          no second sensor to fuse, so the depth source stays off. -->
-    <arg name="map_eap_topic" value="/lidar/points"/>
+    <arg name="map_cloud_enabled" value="true"/>
+    <arg name="map_cloud_topic" value="/cloud/points"/>
     <arg name="map_depth_enabled" value="false"/>
     <arg name="frame_anchor" value="false"/>
     <arg name="anchor_store_path" value="$(var demo_root)/anchor.yaml"/>

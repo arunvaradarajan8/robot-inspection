@@ -3,7 +3,7 @@
 > **This implements the earlier design, not the current pipeline.** Here the
 > Trimble X7 closes the loop: scans are transferred back mid-mission and turned
 > into the occupancy map that drives exploration. The ROS stack no longer works
-> that way — the EAP lidar and the depth camera build the map, and the X7 is
+> that way — the depth camera builds the map, and the X7 is
 > trigger-only with its scans staying on the SD card until the end. See the
 > repository README.
 >
@@ -18,7 +18,7 @@ bridge app (`tools/trimble_perspective_bridge`).
 ```text
 this script (any computer: the Perspective laptop works fine)
   |-- bosdyn SDK --> Spot: pose (vision/odom frame), SE2 walk commands
-  |                  (EAP feeds Spot's onboard obstacle avoidance)
+  |                  (Spot's onboard obstacle avoidance runs underneath)
   |-- HTTP --------> Perspective bridge: POST /scan_request
   `-- watches -----> shared scan folder for the completed .las/.laz
 ```

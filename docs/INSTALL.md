@@ -6,7 +6,7 @@ what each vendor's software will run on.
 | | Jetson (on Spot) | Windows host (tablet or laptop) |
 |---|---|---|
 | Runs | ROS 2, YOLO inference, planning, Spot SDK | Trimble Perspective + the bridge app |
-| Talks to | Spot (EAP lidar, pose, motion), the depth camera | The Trimble X7, the Jetson over HTTP/SSH |
+| Talks to | Spot (pose, motion), the depth camera | The Trimble X7, the Jetson over HTTP/SSH |
 | Why there | CUDA/TensorRT for inference; must ride the robot | **Perspective is Windows-only** — this is the whole reason a second machine exists |
 
 The Windows host does *no* perception and *no* autonomy. It is a scanner
@@ -124,6 +124,23 @@ sudo apt install -y ros-jazzy-depth-image-proc
 
 and run `depth_image_proc/point_cloud_xyz` to produce `MAP_DEPTH_POINTS_TOPIC`.
 
+### 1.5b Fused localization (optional)
+
+Spot's vision frame already walks the robot home, so this is optional. To
+fuse Spot's pose, a navX IMU, and the depth camera's visual odometry through
+an EKF (`FUSED_LOCALIZATION=true`), install `robot_localization`:
+
+```bash
+sudo apt install -y ros-jazzy-robot-localization
+```
+
+The navX bridge publishes `sensor_msgs/Imu`. In `relay` mode it republishes
+an Imu topic another driver already provides; in `serial` mode it reads the
+navX over USB/UART (`pip3 install pyserial`). Set the camera→IMU mount and
+the EKF inputs in `src/defect_detection/config/ekf.yaml` and
+`launch/fused_localization.launch.xml`, and verify the TF tree
+(`ros2 run tf2_tools view_frames`) before trusting it in the field.
+
 ### 1.6 Build and configure
 
 ```bash
@@ -148,9 +165,8 @@ ros2 topic list | grep -E "rgb|depth|points"
 ./scripts/field_preflight.sh mission
 ```
 
-It checks the Spot SDK import, the EAP point cloud client, reachability of
-`SPOT_IP`, and the model/dataset files. Then dry-run the whole loop with no
-hardware at all:
+It checks the Spot SDK import, reachability of `SPOT_IP`, and the
+model/dataset files. Then dry-run the whole loop with no hardware at all:
 
 ```bash
 ./scripts/run_field.sh mission --sim synthetic
@@ -212,7 +228,7 @@ All three devices on one LAN:
 
 | Link | Port | Direction |
 |---|---|---|
-| Jetson → Spot | 443 (gRPC) | SDK: pose, EAP lidar, motion |
+| Jetson → Spot | 443 (gRPC) | SDK: pose, motion |
 | Jetson → Windows | 8765 | Scan requests, status polling |
 | Windows → Jetson | 22 | SSH start/stop |
 | Windows ↔ X7 | Trimble Wi-Fi | Perspective controls the scanner |
@@ -242,7 +258,6 @@ ssh <user>@<jetson-ip> "echo ok"
    tablet and confirm `/digital_twin/map` grows and `/mission/state` advances.
 3. Confirm the sensors independently:
    ```bash
-   ros2 topic hz /eap/points
    ros2 topic hz /depth/points
    ros2 topic echo /mission/state --once
    ```
@@ -260,9 +275,6 @@ reinstall from NVIDIA's Jetson index (§1.2).
 
 **Engine fails to load** — built on different hardware or a different TensorRT.
 Rebuild on this Jetson (§1.3).
-
-**`bosdyn PointCloudClient is unavailable`** — `bosdyn-client` missing, or your
-Spot has no EAP. Without it there is no occupancy map and no exploration.
 
 **Robot stands still at every station for 5 minutes** — the Windows bridge is
 not reporting scan completion. Check `curl http://<windows-ip>:8765/status`

@@ -42,8 +42,9 @@ def bresenham(x0, y0, x1, y1):
 class CloudSource:
     """One sensor feeding the shared occupancy grid.
 
-    The EAP lidar and the depth camera see the site very differently, so
-    each keeps its own height band, trusted range, and decimation budget.
+    A long-range cloud source and the depth camera see the site very
+    differently, so each keeps its own height band, trusted range, and
+    decimation budget.
     """
 
     def __init__(
@@ -74,10 +75,10 @@ class CloudSource:
 class PointCloudToOccupancy(Node):
     """Fuse every observing sensor into one accumulated occupancy grid.
 
-    The EAP lidar supplies long range and 360 degree coverage; the depth
-    camera fills the lidar's near-field blind spot and catches low or thin
-    obstacles. A cell only stays unknown when neither sensor has seen it,
-    so the frontier planner stops chasing blind spots instead of terrain.
+    The depth camera is the field sensor; an optional long-range cloud
+    source (used by the simulator and demo) can be fused alongside it. A
+    cell only stays unknown when no sensor has seen it, so the frontier
+    planner stops chasing blind spots instead of terrain.
     """
 
     def __init__(self):
@@ -97,23 +98,26 @@ class PointCloudToOccupancy(Node):
         self.declare_parameter('scan_origin_x', 0.0)
         self.declare_parameter('scan_origin_y', 0.0)
 
-        # EAP lidar: long range, sparse, sees walls far away.
-        self.declare_parameter('eap_enabled', True)
-        self.declare_parameter('eap_topic', '/eap/points')
-        self.declare_parameter('eap_min_z', -0.25)
-        self.declare_parameter('eap_max_z', 1.20)
-        self.declare_parameter('eap_max_range_m', 40.0)
-        self.declare_parameter('eap_max_points_per_update', 40000)
-        self.declare_parameter('eap_sensor_frame', '')
-        self.declare_parameter('eap_update_period_sec', 0.5)
+        # Optional long-range cloud source: sparse, sees walls far away.
+        # The launch layer turns this off in the field (the depth camera is
+        # the only sensor) and on for the simulator and demo, which feed
+        # their world cloud in through it.
+        self.declare_parameter('cloud_enabled', True)
+        self.declare_parameter('cloud_topic', '/cloud/points')
+        self.declare_parameter('cloud_min_z', -0.25)
+        self.declare_parameter('cloud_max_z', 1.20)
+        self.declare_parameter('cloud_max_range_m', 40.0)
+        self.declare_parameter('cloud_max_points_per_update', 40000)
+        self.declare_parameter('cloud_sensor_frame', '')
+        self.declare_parameter('cloud_update_period_sec', 0.5)
 
-        # Depth camera: short range, dense, fills the near field.
+        # Depth camera: short range, dense. The field map's backbone.
         self.declare_parameter('depth_enabled', True)
         self.declare_parameter('depth_topic', '/depth/points')
         self.declare_parameter('depth_min_z', -0.25)
         self.declare_parameter('depth_max_z', 1.20)
         # Beyond a few metres stereo depth is too noisy to write free
-        # space with; the lidar is authoritative out there.
+        # space with, so returns past this range are dropped.
         self.declare_parameter('depth_max_range_m', 5.0)
         self.declare_parameter('depth_max_points_per_update', 20000)
         self.declare_parameter('depth_sensor_frame', '')
@@ -163,7 +167,7 @@ class PointCloudToOccupancy(Node):
 
         self.publisher = self.create_publisher(OccupancyGrid, map_topic, 1)
         self.sources = []
-        for name in ('eap', 'depth'):
+        for name in ('cloud', 'depth'):
             source = self.build_source(name)
             if source is None:
                 continue
@@ -211,7 +215,7 @@ class PointCloudToOccupancy(Node):
             max_range=value('max_range_m').double_value,
             max_points=max_points,
             # An empty sensor frame means "raytrace from the robot body",
-            # which is right for a lidar mounted over the body centre.
+            # which is right for a sensor mounted over the body centre.
             sensor_frame=value('sensor_frame').string_value or self.base_frame,
             update_period=value('update_period_sec').double_value,
         )
@@ -376,7 +380,7 @@ class PointCloudToOccupancy(Node):
                     break
                 # Never punch a hole through an obstacle another sensor -
                 # or an earlier observation - already reported. A depth
-                # ray skimming a wall must not erase the lidar's wall.
+                # ray skimming a wall must not erase that wall.
                 if self.grid[cell[1], cell[0]] != OCCUPIED:
                     self.grid[cell[1], cell[0]] = FREE
             occupied_cells.add(end_cell)

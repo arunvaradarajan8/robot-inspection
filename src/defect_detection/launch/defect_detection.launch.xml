@@ -17,7 +17,7 @@
        default="$(find-pkg-share defect_detection)/models/yolov11m.engine"/>
   <arg name="image_topic" default="/ros2_image"/>
   <arg name="detections_2d_topic" default="/detections_2d"/>
-  <arg name="pointcloud_topic" default="/lidar/points"/>
+  <arg name="pointcloud_topic" default="/cloud/points"/>
   <arg name="detections_3d_topic" default="/detections_3d"/>
   <arg name="depth_navigation" default="false"
        description="Use the depth camera to turn 2D detections into navigation-ready 3D detections."/>
@@ -47,7 +47,7 @@
   <arg name="sync_queue_size" default="30"
        description="Number of detection and cloud messages retained for matching."/>
   <arg name="sync_slop_sec" default="0.10"
-       description="Maximum camera/LiDAR acquisition-time difference."/>
+       description="Maximum camera/point-cloud acquisition-time difference."/>
   <arg name="trimble_scan_watcher" default="false"
        description="Watch a folder for completed Trimble X7 LAS/LAZ scans."/>
   <arg name="trimble_scan_directory" default="/tmp/trimble_scans"/>
@@ -71,7 +71,7 @@
   <arg name="min_scan_separation_m" default="10.0"
        description="Skip scans closer than this to a previous scan location."/>
   <arg name="digital_twin_map" default="false"
-       description="Fuse the EAP lidar and depth camera into a 2D occupancy map."/>
+       description="Build a 2D occupancy map from the depth camera (and, in sim/demo, a long-range cloud source)."/>
   <arg name="digital_twin_map_topic" default="/digital_twin/map"/>
   <arg name="digital_twin_map_resolution" default="0.10"/>
   <arg name="digital_twin_scan_origin_x" default="0.0"/>
@@ -80,16 +80,17 @@
        description="Merge every observation into one persistent occupancy map."/>
   <arg name="digital_twin_use_tf_scan_origin" default="true"
        description="Raytrace from each sensor's own pose rather than a fixed origin."/>
-  <!-- EAP lidar: long range and 360 degrees, the backbone of the map. -->
-  <arg name="map_eap_enabled" default="true"/>
-  <arg name="map_eap_topic" default="/eap/points"/>
-  <arg name="map_eap_min_z" default="-0.25"/>
-  <arg name="map_eap_max_z" default="1.20"/>
-  <arg name="map_eap_max_range_m" default="40.0"/>
-  <arg name="map_eap_max_points_per_update" default="40000"/>
-  <arg name="map_eap_sensor_frame" default=""/>
-  <arg name="map_eap_update_period_sec" default="0.5"/>
-  <!-- Depth camera: short range and dense, fills the lidar's near field. -->
+  <!-- Optional long-range cloud source: off in the field (depth only);
+       the simulator and demo enable it to feed their world cloud in. -->
+  <arg name="map_cloud_enabled" default="false"/>
+  <arg name="map_cloud_topic" default="/cloud/points"/>
+  <arg name="map_cloud_min_z" default="-0.25"/>
+  <arg name="map_cloud_max_z" default="1.20"/>
+  <arg name="map_cloud_max_range_m" default="40.0"/>
+  <arg name="map_cloud_max_points_per_update" default="40000"/>
+  <arg name="map_cloud_sensor_frame" default=""/>
+  <arg name="map_cloud_update_period_sec" default="0.5"/>
+  <!-- Depth camera: short range and dense, the field map's backbone. -->
   <arg name="map_depth_enabled" default="true"/>
   <arg name="map_depth_points_topic" default="/depth/points"/>
   <arg name="map_depth_min_z" default="-0.25"/>
@@ -122,14 +123,36 @@
        description="Spot world frame: 'vision' is drift-corrected and is what makes the walk home land accurately; 'odom' is smooth but drifts."/>
   <arg name="spot_odom_topic" default="/spot/odom"/>
   <arg name="spot_odom_publish_rate_hz" default="10.0"/>
-  <!-- EAP lidar: obstacle avoidance is Spot's own; this feeds the map. -->
-  <arg name="eap_lidar" default="false"
-       description="Stream the Spot EAP lidar cloud over the SDK into the occupancy map."/>
-  <arg name="eap_lidar_topic" default="/eap/points"/>
-  <arg name="eap_point_cloud_service" default="velodyne-point-cloud"/>
-  <arg name="eap_point_cloud_source" default="velodyne-point-cloud"/>
-  <arg name="eap_publish_rate_hz" default="5.0"/>
-  <arg name="eap_max_points" default="200000"/>
+  <arg name="spot_publish_tf" default="true"
+       description="Let the Spot bridge broadcast world->base TF. Set false when fused_localization is on so the EKF owns the transform."/>
+  <!-- Fused localization: an EKF (robot_localization) blends Spot's
+       vision-frame pose, the navX IMU, and depth-camera visual odometry
+       into one drift-corrected map->base_link transform. When on, the
+       Spot bridge publishes odometry only and the EKF owns the TF. -->
+  <arg name="fused_localization" default="false"
+       description="Fuse Spot vision pose + navX IMU + depth VIO through an EKF for the mission TF."/>
+  <arg name="ekf_config"
+       default="$(find-pkg-share defect_detection)/config/ekf.yaml"/>
+  <arg name="fused_world_frame" default="vision"
+       description="Frame the EKF localizes in; must match robot_world_frame."/>
+  <arg name="navx_imu" default="false"
+       description="Run the navX IMU bridge that publishes sensor_msgs/Imu for the EKF."/>
+  <arg name="navx_imu_topic" default="/navx/imu"/>
+  <arg name="navx_imu_frame" default="navx_imu"/>
+  <arg name="navx_mode" default="relay"
+       description="'relay' republishes an existing Imu topic; 'serial' reads a navX over a serial port."/>
+  <arg name="navx_input_imu_topic" default="/navx/imu_raw"/>
+  <arg name="navx_serial_port" default="/dev/ttyACM0"/>
+  <arg name="navx_serial_baud" default="115200"/>
+  <!-- Where the navX board sits on the robot, base_frame -> navx_imu_frame.
+       The EKF needs this to bring IMU data into the base frame. Defaults to
+       identity; set it to your actual mount pose. -->
+  <arg name="navx_x" default="0.0"/>
+  <arg name="navx_y" default="0.0"/>
+  <arg name="navx_z" default="0.0"/>
+  <arg name="navx_roll" default="0.0"/>
+  <arg name="navx_pitch" default="0.0"/>
+  <arg name="navx_yaw" default="0.0"/>
   <!-- Mission lifecycle: explore, walk home, wait for the E57 upload. -->
   <arg name="mission_manager" default="false"
        description="Own the mission lifecycle and return the robot to its start pose."/>
@@ -303,16 +326,16 @@
            value="$(var digital_twin_use_tf_scan_origin)"/>
     <param name="target_frame" value="$(var navigation_target_frame)"/>
     <param name="base_frame" value="$(var navigation_base_frame)"/>
-    <param name="eap_enabled" value="$(var map_eap_enabled)"/>
-    <param name="eap_topic" value="$(var map_eap_topic)"/>
-    <param name="eap_min_z" value="$(var map_eap_min_z)"/>
-    <param name="eap_max_z" value="$(var map_eap_max_z)"/>
-    <param name="eap_max_range_m" value="$(var map_eap_max_range_m)"/>
-    <param name="eap_max_points_per_update"
-           value="$(var map_eap_max_points_per_update)"/>
-    <param name="eap_sensor_frame" value="$(var map_eap_sensor_frame)"/>
-    <param name="eap_update_period_sec"
-           value="$(var map_eap_update_period_sec)"/>
+    <param name="cloud_enabled" value="$(var map_cloud_enabled)"/>
+    <param name="cloud_topic" value="$(var map_cloud_topic)"/>
+    <param name="cloud_min_z" value="$(var map_cloud_min_z)"/>
+    <param name="cloud_max_z" value="$(var map_cloud_max_z)"/>
+    <param name="cloud_max_range_m" value="$(var map_cloud_max_range_m)"/>
+    <param name="cloud_max_points_per_update"
+           value="$(var map_cloud_max_points_per_update)"/>
+    <param name="cloud_sensor_frame" value="$(var map_cloud_sensor_frame)"/>
+    <param name="cloud_update_period_sec"
+           value="$(var map_cloud_update_period_sec)"/>
     <param name="depth_enabled" value="$(var map_depth_enabled)"/>
     <param name="depth_topic" value="$(var map_depth_points_topic)"/>
     <param name="depth_min_z" value="$(var map_depth_min_z)"/>
@@ -325,20 +348,42 @@
            value="$(var map_depth_update_period_sec)"/>
   </node>
 
-  <node if="$(var eap_lidar)"
+  <!-- navX IMU: a sensor_msgs/Imu source for the fused-localization EKF. -->
+  <node if="$(var navx_imu)"
         pkg="defect_detection"
-        exec="eap_lidar_bridge"
-        name="eap_lidar_bridge"
+        exec="navx_imu_bridge"
+        name="navx_imu_bridge"
         output="screen">
-    <param name="spot_ip" value="$(var spot_ip)"/>
-    <param name="spot_username" value="$(var spot_username)"/>
-    <param name="spot_password" value="$(var spot_password)"/>
-    <param name="point_cloud_service" value="$(var eap_point_cloud_service)"/>
-    <param name="point_cloud_source" value="$(var eap_point_cloud_source)"/>
-    <param name="output_topic" value="$(var eap_lidar_topic)"/>
-    <param name="target_frame" value="$(var navigation_target_frame)"/>
-    <param name="publish_rate_hz" value="$(var eap_publish_rate_hz)"/>
-    <param name="max_points" value="$(var eap_max_points)"/>
+    <param name="mode" value="$(var navx_mode)"/>
+    <param name="imu_topic" value="$(var navx_imu_topic)"/>
+    <param name="frame_id" value="$(var navx_imu_frame)"/>
+    <param name="input_imu_topic" value="$(var navx_input_imu_topic)"/>
+    <param name="serial_port" value="$(var navx_serial_port)"/>
+    <param name="serial_baud" value="$(var navx_serial_baud)"/>
+  </node>
+
+  <node if="$(var navx_imu)"
+        pkg="tf2_ros"
+        exec="static_transform_publisher"
+        name="navx_mount_static_transform"
+        args="--x $(var navx_x) --y $(var navx_y) --z $(var navx_z) --roll $(var navx_roll) --pitch $(var navx_pitch) --yaw $(var navx_yaw) --frame-id $(var navigation_base_frame) --child-frame-id $(var navx_imu_frame)"
+        output="screen"/>
+
+  <!-- Fused localization EKF. Owns the world->base_link TF, so the Spot
+       bridge is set to odometry-only (publish_tf=false) below. -->
+  <node if="$(var fused_localization)"
+        pkg="robot_localization"
+        exec="ekf_node"
+        name="ekf_localization"
+        output="screen">
+    <param from="$(var ekf_config)"/>
+    <param name="map_frame" value="$(var fused_world_frame)"/>
+    <param name="odom_frame" value="$(var fused_world_frame)"/>
+    <param name="world_frame" value="$(var fused_world_frame)"/>
+    <param name="base_link_frame" value="$(var navigation_base_frame)"/>
+    <param name="odom0" value="$(var spot_odom_topic)"/>
+    <param name="imu0" value="$(var navx_imu_topic)"/>
+    <param name="odom1" value="$(var depth_odom_topic)"/>
   </node>
 
   <node if="$(var mission_manager)"
@@ -427,6 +472,7 @@
     <param name="base_frame" value="$(var navigation_base_frame)"/>
     <param name="odom_topic" value="$(var spot_odom_topic)"/>
     <param name="publish_rate_hz" value="$(var spot_odom_publish_rate_hz)"/>
+    <param name="publish_tf" value="$(var spot_publish_tf)"/>
   </node>
 
   <node if="$(var robot_goal_bridge)"

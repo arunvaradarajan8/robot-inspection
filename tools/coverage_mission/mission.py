@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Autonomous Spot EAP + Trimble X7 terrain-coverage mission. No ROS.
+"""Autonomous Spot + Trimble X7 terrain-coverage mission. No ROS.
 
 Loop:
   1. Take a reference scan where the robot starts; that pose anchors the
@@ -9,7 +9,7 @@ Loop:
   4. Scan there, merge, repeat until no frontier remains.
 
 Spot walks with SE2 trajectory commands in its native vision/odom frame
-(EAP feeds onboard perception and obstacle avoidance); the X7 is
+(Spot's onboard perception and obstacle avoidance run underneath); the X7 is
 triggered over HTTP through the Windows Perspective bridge, which drops
 each completed LAS into a shared folder this script watches.
 
@@ -233,7 +233,7 @@ class CoverageMission:
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description='Spot EAP + Trimble X7 autonomous terrain coverage '
+        description='Spot + Trimble X7 autonomous terrain coverage '
                     '(no ROS required)',
     )
     parser.add_argument('--spot-ip', default=os.environ.get('SPOT_IP', ''))

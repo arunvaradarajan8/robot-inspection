@@ -1,8 +1,8 @@
 pointcloud_bridge:
   ros__parameters:
-    input_topic: /lidar/raw
-    output_topic: /lidar/points
-    output_frame: lidar
+    input_topic: /cloud/raw
+    output_topic: /cloud/points
+    output_frame: cloud
     max_cloud_age_sec: 0.5
     max_future_offset_sec: 0.05
     timestamp_mode: source

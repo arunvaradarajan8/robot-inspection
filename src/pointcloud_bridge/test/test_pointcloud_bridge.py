@@ -10,7 +10,7 @@ from pointcloud_bridge.pointcloud_bridge import (
 
 def make_cloud(field_names):
     cloud = PointCloud2()
-    cloud.header.frame_id = 'upstream_lidar'
+    cloud.header.frame_id = 'upstream_cloud'
     cloud.fields = [
         PointField(name=name, offset=index * 4, datatype=PointField.FLOAT32)
         for index, name in enumerate(field_names)
@@ -21,10 +21,10 @@ def make_cloud(field_names):
 def test_normalize_cloud_overrides_frame_and_preserves_input():
     cloud = make_cloud(['x', 'y', 'z', 'intensity'])
 
-    normalized = normalize_cloud(cloud, 'lidar')
+    normalized = normalize_cloud(cloud, 'cloud')
 
-    assert normalized.header.frame_id == 'lidar'
-    assert cloud.header.frame_id == 'upstream_lidar'
+    assert normalized.header.frame_id == 'cloud'
+    assert cloud.header.frame_id == 'upstream_cloud'
     assert [field.name for field in normalized.fields] == [
         'x',
         'y',
@@ -37,7 +37,7 @@ def test_normalize_cloud_requires_xyz_fields():
     cloud = make_cloud(['x', 'y'])
 
     with pytest.raises(ValueError, match='z'):
-        normalize_cloud(cloud, 'lidar')
+        normalize_cloud(cloud, 'cloud')
 
 
 def test_validate_timestamp_accepts_recent_source_time():
@@ -77,7 +77,7 @@ def test_normalize_cloud_can_stamp_on_receive():
 
     normalized = normalize_cloud(
         cloud,
-        'lidar',
+        'cloud',
         receive_stamp=receive_stamp,
     )
 

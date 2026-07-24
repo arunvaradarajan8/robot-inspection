@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <launch>
-  <arg name="lidar_input_topic" default="/lidar/raw"/>
-  <arg name="lidar_frame" default="lidar"/>
+  <arg name="cloud_input_topic" default="/cloud/raw"/>
+  <arg name="cloud_frame" default="cloud"/>
   <arg name="camera_frame" default="body"/>
   <arg name="camera_index" default="0"/>
   <arg name="camera_frame_rate" default="30.0"/>
@@ -18,7 +18,7 @@
        default="$(find-pkg-share defect_detection)/models/yolov11m.engine"/>
   <arg name="image_topic" default="/oak/rgb/image_raw"/>
   <arg name="detections_2d_topic" default="/detections_2d"/>
-  <arg name="pointcloud_topic" default="/lidar/points"/>
+  <arg name="pointcloud_topic" default="/cloud/points"/>
   <arg name="detections_3d_topic" default="/detections_3d"/>
   <arg name="depth_navigation" default="false"/>
   <arg name="depth_topic" default="/oak/rgb/depth"/>
@@ -65,12 +65,12 @@
   <arg name="digital_twin_scan_origin_y" default="0.0"/>
   <arg name="digital_twin_accumulate" default="true"/>
   <arg name="digital_twin_use_tf_scan_origin" default="true"/>
-  <arg name="map_eap_enabled" default="true"/>
-  <arg name="map_eap_topic" default="/eap/points"/>
-  <arg name="map_eap_max_range_m" default="40.0"/>
-  <arg name="map_eap_max_points_per_update" default="40000"/>
-  <arg name="map_eap_sensor_frame" default=""/>
-  <arg name="map_eap_update_period_sec" default="0.5"/>
+  <arg name="map_cloud_enabled" default="false"/>
+  <arg name="map_cloud_topic" default="/cloud/points"/>
+  <arg name="map_cloud_max_range_m" default="40.0"/>
+  <arg name="map_cloud_max_points_per_update" default="40000"/>
+  <arg name="map_cloud_sensor_frame" default=""/>
+  <arg name="map_cloud_update_period_sec" default="0.5"/>
   <arg name="map_depth_enabled" default="true"/>
   <arg name="map_depth_points_topic" default="/depth/points"/>
   <arg name="map_depth_max_range_m" default="5.0"/>
@@ -96,12 +96,14 @@
   <arg name="spot_frame" default="vision"/>
   <arg name="spot_odom_topic" default="/spot/odom"/>
   <arg name="spot_odom_publish_rate_hz" default="10.0"/>
-  <arg name="eap_lidar" default="false"/>
-  <arg name="eap_lidar_topic" default="/eap/points"/>
-  <arg name="eap_point_cloud_service" default="velodyne-point-cloud"/>
-  <arg name="eap_point_cloud_source" default="velodyne-point-cloud"/>
-  <arg name="eap_publish_rate_hz" default="5.0"/>
-  <arg name="eap_max_points" default="200000"/>
+  <arg name="spot_publish_tf" default="true"/>
+  <arg name="fused_localization" default="false"/>
+  <arg name="navx_imu" default="false"/>
+  <arg name="navx_mode" default="relay"/>
+  <arg name="navx_imu_topic" default="/navx/imu"/>
+  <arg name="navx_input_imu_topic" default="/navx/imu_raw"/>
+  <arg name="navx_serial_port" default="/dev/ttyACM0"/>
+  <arg name="navx_serial_baud" default="115200"/>
   <arg name="mission_manager" default="false"/>
   <arg name="mission_state_topic" default="/mission/state"/>
   <arg name="mission_return_home_topic" default="/mission/return_home"/>
@@ -147,9 +149,9 @@
        default="/digital_twin/rescan_goals"/>
 
   <include file="$(find-pkg-share pointcloud_bridge)/launch/pointcloud_bridge.launch.xml">
-    <arg name="input_topic" value="$(var lidar_input_topic)"/>
+    <arg name="input_topic" value="$(var cloud_input_topic)"/>
     <arg name="output_topic" value="$(var pointcloud_topic)"/>
-    <arg name="lidar_frame" value="$(var lidar_frame)"/>
+    <arg name="cloud_frame" value="$(var cloud_frame)"/>
     <arg name="camera_frame" value="$(var camera_frame)"/>
     <arg name="publish_extrinsics" value="$(var publish_extrinsics)"/>
     <arg name="timestamp_mode" value="$(var timestamp_mode)"/>
@@ -236,14 +238,14 @@
          value="$(var digital_twin_accumulate)"/>
     <arg name="digital_twin_use_tf_scan_origin"
          value="$(var digital_twin_use_tf_scan_origin)"/>
-    <arg name="map_eap_enabled" value="$(var map_eap_enabled)"/>
-    <arg name="map_eap_topic" value="$(var map_eap_topic)"/>
-    <arg name="map_eap_max_range_m" value="$(var map_eap_max_range_m)"/>
-    <arg name="map_eap_max_points_per_update"
-         value="$(var map_eap_max_points_per_update)"/>
-    <arg name="map_eap_sensor_frame" value="$(var map_eap_sensor_frame)"/>
-    <arg name="map_eap_update_period_sec"
-         value="$(var map_eap_update_period_sec)"/>
+    <arg name="map_cloud_enabled" value="$(var map_cloud_enabled)"/>
+    <arg name="map_cloud_topic" value="$(var map_cloud_topic)"/>
+    <arg name="map_cloud_max_range_m" value="$(var map_cloud_max_range_m)"/>
+    <arg name="map_cloud_max_points_per_update"
+         value="$(var map_cloud_max_points_per_update)"/>
+    <arg name="map_cloud_sensor_frame" value="$(var map_cloud_sensor_frame)"/>
+    <arg name="map_cloud_update_period_sec"
+         value="$(var map_cloud_update_period_sec)"/>
     <arg name="map_depth_enabled" value="$(var map_depth_enabled)"/>
     <arg name="map_depth_points_topic"
          value="$(var map_depth_points_topic)"/>
@@ -278,14 +280,14 @@
     <arg name="spot_odom_topic" value="$(var spot_odom_topic)"/>
     <arg name="spot_odom_publish_rate_hz"
          value="$(var spot_odom_publish_rate_hz)"/>
-    <arg name="eap_lidar" value="$(var eap_lidar)"/>
-    <arg name="eap_lidar_topic" value="$(var eap_lidar_topic)"/>
-    <arg name="eap_point_cloud_service"
-         value="$(var eap_point_cloud_service)"/>
-    <arg name="eap_point_cloud_source"
-         value="$(var eap_point_cloud_source)"/>
-    <arg name="eap_publish_rate_hz" value="$(var eap_publish_rate_hz)"/>
-    <arg name="eap_max_points" value="$(var eap_max_points)"/>
+    <arg name="spot_publish_tf" value="$(var spot_publish_tf)"/>
+    <arg name="fused_localization" value="$(var fused_localization)"/>
+    <arg name="navx_imu" value="$(var navx_imu)"/>
+    <arg name="navx_mode" value="$(var navx_mode)"/>
+    <arg name="navx_imu_topic" value="$(var navx_imu_topic)"/>
+    <arg name="navx_input_imu_topic" value="$(var navx_input_imu_topic)"/>
+    <arg name="navx_serial_port" value="$(var navx_serial_port)"/>
+    <arg name="navx_serial_baud" value="$(var navx_serial_baud)"/>
     <arg name="mission_manager" value="$(var mission_manager)"/>
     <arg name="mission_state_topic" value="$(var mission_state_topic)"/>
     <arg name="mission_return_home_topic"

@@ -123,7 +123,7 @@ class DetectionVisualizationNode(Node):
 
         self.declare_parameter(
             'pointcloud_topic',
-            '/lidar/points',
+            '/cloud/points',
         )
         self.declare_parameter(
             'visualization_pointcloud_topic',

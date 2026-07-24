@@ -56,10 +56,10 @@ class PointCloudBridge(Node):
     def __init__(self):
         super().__init__('pointcloud_bridge')
 
-        self.declare_parameter('input_topic', '/lidar/raw')
+        self.declare_parameter('input_topic', '/cloud/raw')
         self.declare_parameter(
             'output_topic',
-            '/lidar/points',
+            '/cloud/points',
         )
         self.declare_parameter('output_frame', '')
         self.declare_parameter('max_cloud_age_sec', 0.5)

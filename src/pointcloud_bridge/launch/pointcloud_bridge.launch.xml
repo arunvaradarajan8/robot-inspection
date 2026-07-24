@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <launch>
-  <arg name="input_topic" default="/lidar/raw"/>
-  <arg name="output_topic" default="/lidar/points"/>
-  <arg name="lidar_frame" default="lidar"/>
+  <arg name="input_topic" default="/cloud/raw"/>
+  <arg name="output_topic" default="/cloud/points"/>
+  <arg name="cloud_frame" default="cloud"/>
   <arg name="camera_frame" default="camera_optical_frame"/>
   <arg name="max_cloud_age_sec" default="0.5"/>
   <arg name="max_future_offset_sec" default="0.05"/>
@@ -22,7 +22,7 @@
         output="screen">
     <param name="input_topic" value="$(var input_topic)"/>
     <param name="output_topic" value="$(var output_topic)"/>
-    <param name="output_frame" value="$(var lidar_frame)"/>
+    <param name="output_frame" value="$(var cloud_frame)"/>
     <param name="max_cloud_age_sec" value="$(var max_cloud_age_sec)"/>
     <param name="max_future_offset_sec" value="$(var max_future_offset_sec)"/>
     <param name="timestamp_mode" value="$(var timestamp_mode)"/>
@@ -31,7 +31,7 @@
   <node if="$(var publish_extrinsics)"
         pkg="tf2_ros"
         exec="static_transform_publisher"
-        name="lidar_to_camera_static_transform"
-        args="--x $(var x) --y $(var y) --z $(var z) --roll $(var roll) --pitch $(var pitch) --yaw $(var yaw) --frame-id $(var lidar_frame) --child-frame-id $(var camera_frame)"
+        name="cloud_to_camera_static_transform"
+        args="--x $(var x) --y $(var y) --z $(var z) --roll $(var roll) --pitch $(var pitch) --yaw $(var yaw) --frame-id $(var cloud_frame) --child-frame-id $(var camera_frame)"
         output="screen"/>
 </launch>

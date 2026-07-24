@@ -1,0 +1,62 @@
+# robot_localization EKF for fused localization.
+#
+# Blends three sources into one drift-corrected vision -> body transform:
+#   odom0 = Spot vision-frame pose  (absolute x, y, yaw)  -> global anchor
+#   imu0  = navX AHRS               (absolute yaw)         -> heading hold
+#   odom1 = depth-camera VIO        (relative x, y, yaw)   -> smooth motion
+#
+# The frames (map/odom/world/base_link) and the odom0/imu0/odom1 TOPIC names
+# are set from fused_localization.launch.xml / defect_detection.launch.xml,
+# so this file only holds the fusion configuration. The '/**' wildcard makes
+# it apply whatever the node is named.
+#
+# config order (15 booleans):
+#   x, y, z, roll, pitch, yaw,
+#   vx, vy, vz, vroll, vpitch, vyaw,
+#   ax, ay, az
+/**:
+  ros__parameters:
+    frequency: 30.0
+    sensor_timeout: 0.2
+    # The robot drives on the ground: hold z, roll, pitch, and their rates
+    # at zero and estimate only the planar pose. This alone removes most of
+    # the jitter a full 3D estimate would introduce from a walking gait.
+    two_d_mode: true
+    publish_tf: true
+    print_diagnostics: true
+
+    # Spot's vision-frame pose: the drift-corrected global anchor. Absolute
+    # x, y, and yaw; no differencing so it pins the estimate to Spot's frame.
+    odom0_differential: false
+    odom0_relative: false
+    odom0_queue_size: 10
+    odom0_config: [true,  true,  false,
+                   false, false, true,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false]
+
+    # navX AHRS: absolute yaw only. Its covariance (set in navx_imu_bridge)
+    # marks angular velocity and acceleration as unavailable, so only the
+    # heading is fused here to keep yaw from drifting over a long excursion.
+    imu0_differential: false
+    imu0_relative: false
+    imu0_queue_size: 10
+    imu0_remove_gravitational_acceleration: true
+    imu0_config: [false, false, false,
+                  false, false, true,
+                  false, false, false,
+                  false, false, false,
+                  false, false, false]
+
+    # Depth-camera visual odometry: fused differentially, so only its
+    # frame-to-frame motion is used. That gives smooth local motion without
+    # letting VIO drift fight Spot's absolute pose.
+    odom1_differential: true
+    odom1_relative: false
+    odom1_queue_size: 10
+    odom1_config: [true,  true,  false,
+                   false, false, true,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false]

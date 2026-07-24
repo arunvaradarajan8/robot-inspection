@@ -7,16 +7,16 @@ triggers a Trimble X7 scan at every stop, and returns to where it started.
 ## The Pipeline
 
 ```text
-Spot EAP lidar  ──┐
-                  ├─► fused occupancy map ─► frontier goals ──┐
-depth camera    ──┘                                           │
-      │                                                       ▼
-      └─► YOLO ─► 3D defects ─► defect standoff goals ─► inspection goal
+depth camera ──┬─► occupancy map ─► frontier goals ───────────┐
+               │                                              │
+               └─► YOLO ─► 3D defects ─► defect standoff goals ┤
                                      (preferred)              │
+                                                       inspection goal
+                                                              │
                                                               ▼
                                                     Spot SE2 walk command
-                                                    (EAP feeds Spot's own
-                                                     obstacle avoidance)
+                                                    (Spot's own onboard
+                                                     obstacle avoidance runs)
                                                               │
                                                               ▼
                                               arrival verified over TF
@@ -37,10 +37,11 @@ writes its scans to its own SD card. Nothing it produces feeds localization,
 mapping, or planning during the mission. The operator uploads the E57 at the
 end, once the robot is home.
 
-**Both sensors build one map.** The EAP lidar gives long range and 360°
-coverage; the depth camera fills the lidar's near-field blind spot and catches
-low or thin obstacles. A cell is only unknown when *neither* sensor has seen
-it, so the frontier planner explores real terrain instead of blind spots.
+**The depth camera builds the map.** Its point cloud is fused into one
+accumulated occupancy grid; a cell is only unknown when the camera has never
+seen it, so the frontier planner explores real terrain instead of blind spots.
+(The simulator and demo feed a long-range synthetic cloud through the same
+map source in place of a real camera.)
 
 **Defects come first.** When YOLO has found something, the planner walks to a
 standoff distance from it so the X7 captures it closely. Only when there is
@@ -60,17 +61,24 @@ stack proposes goals without moving hardware.
 
 ## Hardware
 
-**Spot + EAP (Enhanced Autonomy Payload).** The EAP does two jobs. Its lidar
-feeds Spot's own onboard obstacle avoidance while walking, and this stack also
-pulls that lidar cloud over the Boston Dynamics SDK
-(`bosdyn.client.point_cloud.PointCloudClient`) and publishes it as
-`/eap/points` for the occupancy map. Spot's world pose comes from the same SDK
-via `spot_localization_bridge`.
+**Spot.** The robot's world pose comes over the Boston Dynamics SDK via
+`spot_localization_bridge`, and SE2 walk commands go back the same way. Spot's
+own onboard obstacle avoidance runs underneath every command.
 
 The mission runs in Spot's **vision** frame rather than `odom`. Vision is
 drift-corrected against Spot's own cameras, and the accuracy of the walk home
 after a long excursion follows directly from that choice. Set
 `SPOT_FRAME=odom` for the smoother but drifting alternative.
+
+**Localization (optional fusion).** Spot's vision frame alone already walks
+the robot home. For a steadier estimate you can fuse Spot's pose, a **navX
+IMU**, and the depth camera's **visual odometry** through a `robot_localization`
+EKF (`FUSED_LOCALIZATION=true`). When on, `spot_localization_bridge` streams
+odometry only and the EKF owns the `vision -> body` transform; the navX bridge
+(`navx_imu_bridge`) publishes `sensor_msgs/Imu` either by relaying an existing
+Imu topic or by reading a navX over USB/UART. See the EKF inputs in
+`config/ekf.yaml` and `launch/fused_localization.launch.xml`, and verify the
+TF tree on the Jetson before relying on it.
 
 **Depth camera.** Any depth camera works; the defaults match a Luxonis OAK
 running `depthai_ros`. It supplies RGB for YOLO, aligned depth to turn 2D
@@ -135,7 +143,8 @@ defects, two pillars, and a ground plane. The Gazebo world SDF, the synthetic
 scans, and the ground-truth detections are all generated from it, so they
 cannot drift apart.
 
-In sim the simulated world cloud stands in for the EAP lidar. The simulated
+In sim the simulated world cloud feeds the map's long-range cloud source in
+place of a depth camera. The simulated
 X7 still writes a LAS file, and — exactly as in the field — nothing reads it
 back; it only stands in for the scanner's SD card. Sim state lives under
 `/tmp/synthetic_demo` and is wiped on each start.
@@ -148,7 +157,7 @@ back; it only stands in for the scanner's SD card. Sim state lives under
 
 The real robot, the real localization, the real Trimble X7 — an invented site.
 `virtual_site_node` loads a predefined 3D point cloud, anchors it at the
-robot's pose when the demo launched, and plays it back as if a lidar were
+robot's pose when the demo launched, and plays it back as if a sensor were
 sweeping it: range-limited and occluded from the robot's live TF pose, so the
 occupancy map fills in as the robot walks and the frontier planner still has
 somewhere to go. Defects planted in the site are published as 3D detections
@@ -157,7 +166,7 @@ pose and triggers a real X7 scan on arrival.
 
 Everything downstream is the field pipeline unmodified — same occupancy map,
 planner, mission manager, goal bridge, scan trigger, and walk home. Only the
-EAP lidar, the depth camera, and YOLO are absent.
+depth camera and YOLO are absent.
 
 The site is a YAML file (`src/defect_detection/config/demo_site.yaml`) whose
 coordinates are metres relative to the robot at launch: `+x` ahead, `+y` left.
@@ -261,7 +270,8 @@ engine must be built on the Jetson itself.
 - OpenCV and `cv_bridge`
 - Ultralytics for YOLO
 - A depth camera driver publishing RGB, aligned depth, and `camera_info`
-- `bosdyn-client` for Spot state, the EAP lidar, and motion commands
+- `bosdyn-client` for Spot state and motion commands
+- `robot_localization` and `pyserial`, only for the optional fused localization
 - `laspy` / `lazrs` only for the legacy LAS ingest path and the simulator
 
 ```bash

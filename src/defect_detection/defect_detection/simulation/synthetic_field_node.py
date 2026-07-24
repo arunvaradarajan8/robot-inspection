@@ -96,7 +96,7 @@ class SyntheticFieldNode(Node):
         self.declare_parameter('depth_topic', '/oak/rgb/depth')
         self.declare_parameter('camera_info_topic', '/oak/rgb/camera_info')
         self.declare_parameter('detections_2d_topic', '/detections_2d')
-        self.declare_parameter('pointcloud_topic', '/lidar/points')
+        self.declare_parameter('pointcloud_topic', '/cloud/points')
         self.declare_parameter('scan_required_topic', '/digital_twin/scan_required')
         self.declare_parameter('scan_topic', '/trimble/x7/scan_points')
         self.declare_parameter('scan_complete_topic', '/digital_twin/scan_complete')

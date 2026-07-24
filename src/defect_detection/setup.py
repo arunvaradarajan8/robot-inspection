@@ -29,7 +29,7 @@ setup(
     zip_safe=True,
     maintainer='avaradar',
     maintainer_email='arunvaradarajan3@gmail.com',
-    description='ROS 2 camera, detection, and LiDAR fusion nodes.',
+    description='ROS 2 camera, detection, and point-cloud fusion nodes.',
     license='Apache-2.0',
     extras_require={
         'test': [
@@ -64,8 +64,8 @@ setup(
             'defect_detection.digital_twin.depth_localization_bridge:main',
             'spot_localization_bridge = '
             'defect_detection.digital_twin.spot_localization_bridge:main',
-            'eap_lidar_bridge = '
-            'defect_detection.digital_twin.eap_lidar_bridge:main',
+            'navx_imu_bridge = '
+            'defect_detection.digital_twin.navx_imu_bridge:main',
             'mission_manager = '
             'defect_detection.digital_twin.mission_manager:main',
             'synthetic_field_node = '

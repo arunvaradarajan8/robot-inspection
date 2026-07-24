@@ -108,8 +108,7 @@ if [[ "${MODE}" == "mission" || "${MODE}" == "demo" ]]; then
   needs_spot_sdk=true
 fi
 if [[ "${ROBOT_GOAL_BACKEND:-}" == "spot_sdk" ||
-      "${SPOT_LOCALIZATION:-false}" == "true" ||
-      "${EAP_LIDAR:-false}" == "true" ]]; then
+      "${SPOT_LOCALIZATION:-false}" == "true" ]]; then
   needs_spot_sdk=true
 fi
 
@@ -123,16 +122,9 @@ if [[ "${needs_spot_sdk}" == "true" ]]; then
   check_value SPOT_IP
 fi
 
-# The EAP lidar is the backbone of the occupancy map, so a missing point
-# cloud service means no frontier exploration at all.
-if [[ "${MODE}" == "mission" || "${EAP_LIDAR:-false}" == "true" ]]; then
-  if python3 -c 'from bosdyn.client.point_cloud import PointCloudClient' \
-      >/dev/null 2>&1; then
-    printf 'OK:   Spot EAP point cloud client is importable\n'
-  else
-    printf 'FAIL: bosdyn PointCloudClient is unavailable; the EAP lidar cannot be read\n'
-    failures=$((failures + 1))
-  fi
+# The depth camera builds the occupancy map. Confirm Spot is reachable so
+# localization and motion come up when the mission starts.
+if [[ "${MODE}" == "mission" ]]; then
   if [[ -n "${SPOT_IP:-}" ]] && command -v ping >/dev/null 2>&1; then
     if ping -c 1 -W 2 "${SPOT_IP}" >/dev/null 2>&1; then
       printf 'OK:   Spot is reachable at %s\n' "${SPOT_IP}"

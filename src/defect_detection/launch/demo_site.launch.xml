@@ -5,8 +5,8 @@
   Everything that touches hardware is the field pipeline unchanged -
   Spot's vision-frame localization, the SE2 goal bridge, the Windows
   Perspective bridge triggering the X7, the mission manager walking the
-  robot home. Only perception is replaced: instead of the EAP lidar and
-  the depth camera, virtual_site_node plays back a predefined 3D point
+  robot home. Only perception is replaced: instead of the depth camera,
+  virtual_site_node plays back a predefined 3D point
   cloud anchored at the robot's pose when the demo launched, and publishes
   the defects planted in it as 3D detections.
 
@@ -31,9 +31,9 @@
        description="Scales how densely the site's surfaces are sampled."/>
   <arg name="demo_cloud_topic" default="/demo/points"
        description="Where the virtual site is played back. It feeds the
-                    occupancy map through the EAP source."/>
+                    occupancy map through the long-range cloud source."/>
   <arg name="sensor_range_m" default="20.0"
-       description="How far the simulated lidar sees into the virtual site."/>
+       description="How far the simulated sensor sees into the virtual site."/>
   <arg name="detection_range_m" default="8.0"
        description="How close the robot must be to 'detect' a defect."/>
   <arg name="detection_fov_deg" default="90.0"/>
@@ -115,15 +115,14 @@
     <arg name="detector" value="false"/>
     <arg name="depth_navigation" value="false"/>
     <arg name="depth_localization" value="false"/>
-    <arg name="eap_lidar" value="false"/>
     <arg name="map_depth_enabled" value="false"/>
 
-    <!-- The virtual site enters the map where the EAP lidar normally
-         would: same accumulated grid, same raytrace from the robot pose. -->
+    <!-- The virtual site enters the map through the long-range cloud
+         source: one accumulated grid, raytraced from the robot pose. -->
     <arg name="digital_twin_map" value="true"/>
-    <arg name="map_eap_enabled" value="true"/>
-    <arg name="map_eap_topic" value="$(var demo_cloud_topic)"/>
-    <arg name="map_eap_max_range_m" value="$(var sensor_range_m)"/>
+    <arg name="map_cloud_enabled" value="true"/>
+    <arg name="map_cloud_topic" value="$(var demo_cloud_topic)"/>
+    <arg name="map_cloud_max_range_m" value="$(var sensor_range_m)"/>
     <arg name="digital_twin_accumulate" value="true"/>
     <arg name="digital_twin_use_tf_scan_origin" value="true"/>
 

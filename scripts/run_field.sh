@@ -4,8 +4,8 @@ set -euo pipefail
 usage() {
   echo "Usage: $0 [mission|demo|slam|transport|full] [--sim gazebo|synthetic]"
   echo
-  echo "  mission          The field pipeline: Spot EAP lidar and the depth"
-  echo "                   camera build the map, the planner visits defects"
+  echo "  mission          The field pipeline: the depth camera builds the"
+  echo "                   map, the planner visits defects"
   echo "                   first and frontiers otherwise, the Trimble X7 is"
   echo "                   triggered at each stop, and the robot walks back"
   echo "                   to its start pose before waiting for the E57."
@@ -16,7 +16,7 @@ usage() {
   echo "  demo             The same mission on the real robot and the real"
   echo "                   X7, but the site is invented: a predefined 3D"
   echo "                   point cloud anchored at the robot's start pose"
-  echo "                   stands in for the lidar and the depth camera."
+  echo "                   stands in for the depth camera."
   echo "                   Run it in a large, empty, open area."
   echo "  transport|full   Reduced bringup for bench work on the real robot."
   echo "  --sim gazebo     Run the same pipeline against a Gazebo simulation."
@@ -151,7 +151,7 @@ fi
 
 # Demo mode: the robot, its localization, its motion, and the X7 are all
 # real; only the site is invented. A predefined 3D point cloud anchored
-# at the robot's start pose replaces the EAP lidar and the depth camera,
+# at the robot's start pose replaces the depth camera,
 # so the whole mission loop runs in an empty open area.
 if [[ "${MODE}" == "demo" ]]; then
   DEMO_ROOT="${DEMO_ROOT:-/tmp/demo_site}"
@@ -209,35 +209,45 @@ planner_hold_for_scan="${PLANNER_HOLD_FOR_SCAN:-true}"
 accumulate="${DIGITAL_TWIN_ACCUMULATE:-true}"
 use_tf_scan_origin="${DIGITAL_TWIN_USE_TF_SCAN_ORIGIN:-true}"
 spot_localization="${SPOT_LOCALIZATION:-false}"
-eap_lidar="${EAP_LIDAR:-false}"
 mission_manager="${MISSION_MANAGER:-false}"
 map_depth_enabled="${MAP_DEPTH_ENABLED:-false}"
 robot_world_frame="${ROBOT_WORLD_FRAME:-vision}"
 defect_map="${DEFECT_MAP:-true}"
+fused_localization="${FUSED_LOCALIZATION:-false}"
 if [[ "${MODE}" == "full" ]]; then
   detector=true
 elif [[ "${MODE}" == "mission" ]]; then
   # The field pipeline. Spot's vision frame localizes the mission, the
-  # EAP lidar and the depth camera fuse into one occupancy map, YOLO
-  # finds defects worth a closer Trimble scan, and the mission manager
-  # walks the robot home when there is nothing left to visit.
+  # depth camera builds the occupancy map, YOLO finds defects worth a
+  # closer Trimble scan, and the mission manager walks the robot home
+  # when there is nothing left to visit.
   detector=true
   depth_navigation="${DEPTH_NAVIGATION:-true}"
   depth_localization=false
   spot_localization="${SPOT_LOCALIZATION:-true}"
-  eap_lidar="${EAP_LIDAR:-true}"
   mission_manager="${MISSION_MANAGER:-true}"
   map_depth_enabled="${MAP_DEPTH_ENABLED:-true}"
   defect_map="${DEFECT_MAP:-true}"
 fi
 
+# Fused localization: an EKF blends Spot vision pose + navX IMU + depth
+# VIO. When on, the Spot bridge streams odometry only and the EKF owns
+# the world->base TF, and the navX bridge is brought up by default.
+if [[ "${fused_localization}" == "true" ]]; then
+  spot_publish_tf=false
+  navx_imu="${NAVX_IMU:-true}"
+else
+  spot_publish_tf=true
+  navx_imu="${NAVX_IMU:-false}"
+fi
+
 exec ros2 launch pointcloud_bridge full_pipeline.launch.xml \
-  lidar_input_topic:="${LIDAR_INPUT_TOPIC:-/lidar/raw}" \
-  pointcloud_topic:="${POINTCLOUD_TOPIC:-/lidar/points}" \
+  cloud_input_topic:="${CLOUD_INPUT_TOPIC:-/cloud/raw}" \
+  pointcloud_topic:="${POINTCLOUD_TOPIC:-/cloud/points}" \
   publish_camera:="${PUBLISH_CAMERA:-false}" \
   camera_index:="${CAMERA_INDEX:-0}" \
   camera_frame:="${CAMERA_FRAME:-camera_optical_frame}" \
-  lidar_frame:="${LIDAR_FRAME:-lidar}" \
+  cloud_frame:="${CLOUD_FRAME:-cloud}" \
   dataset_path:="${DATASET_PATH:-}" \
   model_path:="${MODEL_PATH:-}" \
   image_topic:="${IMAGE_TOPIC:-/ros2_image}" \
@@ -274,10 +284,10 @@ exec ros2 launch pointcloud_bridge full_pipeline.launch.xml \
   digital_twin_map:="${DIGITAL_TWIN_MAP:-true}" \
   digital_twin_accumulate:="${accumulate}" \
   digital_twin_use_tf_scan_origin:="${use_tf_scan_origin}" \
-  map_eap_enabled:="${MAP_EAP_ENABLED:-true}" \
-  map_eap_topic:="${MAP_EAP_TOPIC:-/eap/points}" \
-  map_eap_max_range_m:="${MAP_EAP_MAX_RANGE_M:-40.0}" \
-  map_eap_sensor_frame:="${MAP_EAP_SENSOR_FRAME:-}" \
+  map_cloud_enabled:="${MAP_CLOUD_ENABLED:-false}" \
+  map_cloud_topic:="${MAP_CLOUD_TOPIC:-/cloud/points}" \
+  map_cloud_max_range_m:="${MAP_CLOUD_MAX_RANGE_M:-40.0}" \
+  map_cloud_sensor_frame:="${MAP_CLOUD_SENSOR_FRAME:-}" \
   map_depth_enabled:="${map_depth_enabled}" \
   map_depth_points_topic:="${MAP_DEPTH_POINTS_TOPIC:-/depth/points}" \
   map_depth_max_range_m:="${MAP_DEPTH_MAX_RANGE_M:-5.0}" \
@@ -294,10 +304,14 @@ exec ros2 launch pointcloud_bridge full_pipeline.launch.xml \
   spot_localization:="${spot_localization}" \
   spot_frame:="${SPOT_FRAME:-vision}" \
   spot_odom_topic:="${SPOT_ODOM_TOPIC:-/spot/odom}" \
-  eap_lidar:="${eap_lidar}" \
-  eap_lidar_topic:="${EAP_LIDAR_TOPIC:-/eap/points}" \
-  eap_point_cloud_service:="${EAP_POINT_CLOUD_SERVICE:-velodyne-point-cloud}" \
-  eap_point_cloud_source:="${EAP_POINT_CLOUD_SOURCE:-velodyne-point-cloud}" \
+  spot_publish_tf:="${spot_publish_tf}" \
+  fused_localization:="${fused_localization}" \
+  navx_imu:="${navx_imu}" \
+  navx_mode:="${NAVX_MODE:-relay}" \
+  navx_imu_topic:="${NAVX_IMU_TOPIC:-/navx/imu}" \
+  navx_input_imu_topic:="${NAVX_INPUT_IMU_TOPIC:-/navx/imu_raw}" \
+  navx_serial_port:="${NAVX_SERIAL_PORT:-/dev/ttyACM0}" \
+  navx_serial_baud:="${NAVX_SERIAL_BAUD:-115200}" \
   mission_manager:="${mission_manager}" \
   mission_summary_path:="${MISSION_SUMMARY_PATH:-/tmp/mission_summary.yaml}" \
   mission_max_stations:="${MISSION_MAX_STATIONS:-0}" \

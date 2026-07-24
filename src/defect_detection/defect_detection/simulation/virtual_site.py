@@ -1,7 +1,7 @@
 """The virtual site a demo mission navigates: geometry plus defects.
 
-Demo mode replaces the EAP lidar and the depth camera with a site that
-only exists in the robot's head, so the mission can run its full loop -
+Demo mode replaces the depth camera with a site that only exists in the
+robot's head, so the mission can run its full loop -
 explore, walk to a defect, trigger the X7 - in an empty field with no
 structure to see. The site is authored in a YAML file:
 
@@ -108,7 +108,7 @@ def sweep(
     range_noise=0.0,
     rng=None,
 ):
-    """Points a lidar standing at (origin_x, origin_y) would return.
+    """Points a sensor standing at (origin_x, origin_y) would return.
 
     Range-limited, then occluded: within each bearing bin only the
     nearest surface and a shallow skin behind it survive. That is what
@@ -202,8 +202,8 @@ def parse_defect(entry):
 # ---- surface sampling ---------------------------------------------------
 #
 # Every surface is sampled at roughly POINTS_PER_SQUARE_METRE so a site
-# built from a handful of primitives lands in the same density range as
-# the EAP lidar returns the occupancy map is tuned for.
+# built from a handful of primitives lands in the same density range the
+# occupancy map is tuned for.
 
 POINTS_PER_SQUARE_METRE = 400.0
 
@@ -263,7 +263,7 @@ def sample_box(surface, rng, density):
     size = np.asarray(surface.get('size', (1.0, 1.0, 1.0)), dtype=float)
     half = size / 2.0
     # Sample the four vertical faces and the top; the underside is never
-    # seen by a lidar standing on the same ground.
+    # seen by a sensor standing on the same ground.
     faces = []
     for axis, extent in ((0, half[0]), (1, half[1])):
         other = 1 - axis

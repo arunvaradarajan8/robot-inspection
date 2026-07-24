@@ -34,6 +34,10 @@ class SpotLocalizationBridge(Node):
         self.declare_parameter('odom_topic', '/spot/odom')
         self.declare_parameter('publish_rate_hz', 10.0)
         self.declare_parameter('reconnect_interval_sec', 5.0)
+        # Broadcast odom_frame->base_frame TF. Turn this off when an EKF
+        # (fused localization) owns the transform and only wants the
+        # nav_msgs/Odometry stream as one of its inputs.
+        self.declare_parameter('publish_tf', True)
 
         self.spot_ip = self.get_parameter(
             'spot_ip'
@@ -64,8 +68,11 @@ class SpotLocalizationBridge(Node):
         self.reconnect_interval = self.get_parameter(
             'reconnect_interval_sec'
         ).get_parameter_value().double_value
+        self.publish_tf = self.get_parameter(
+            'publish_tf'
+        ).get_parameter_value().bool_value
 
-        self.tf_broadcaster = TransformBroadcaster(self)
+        self.tf_broadcaster = TransformBroadcaster(self) if self.publish_tf else None
         self.odom_publisher = self.create_publisher(Odometry, odom_topic, 10)
         self.state_client = None
         self.last_connect_attempt = 0.0
@@ -163,18 +170,19 @@ class SpotLocalizationBridge(Node):
             return
         stamp = self.get_clock().now().to_msg()
 
-        transform = TransformStamped()
-        transform.header.stamp = stamp
-        transform.header.frame_id = self.odom_frame
-        transform.child_frame_id = self.base_frame
-        transform.transform.translation.x = float(pose.x)
-        transform.transform.translation.y = float(pose.y)
-        transform.transform.translation.z = float(pose.z)
-        transform.transform.rotation.x = float(pose.rot.x)
-        transform.transform.rotation.y = float(pose.rot.y)
-        transform.transform.rotation.z = float(pose.rot.z)
-        transform.transform.rotation.w = float(pose.rot.w)
-        self.tf_broadcaster.sendTransform(transform)
+        if self.tf_broadcaster is not None:
+            transform = TransformStamped()
+            transform.header.stamp = stamp
+            transform.header.frame_id = self.odom_frame
+            transform.child_frame_id = self.base_frame
+            transform.transform.translation.x = float(pose.x)
+            transform.transform.translation.y = float(pose.y)
+            transform.transform.translation.z = float(pose.z)
+            transform.transform.rotation.x = float(pose.rot.x)
+            transform.transform.rotation.y = float(pose.rot.y)
+            transform.transform.rotation.z = float(pose.rot.z)
+            transform.transform.rotation.w = float(pose.rot.w)
+            self.tf_broadcaster.sendTransform(transform)
 
         odometry = Odometry()
         odometry.header.stamp = stamp
