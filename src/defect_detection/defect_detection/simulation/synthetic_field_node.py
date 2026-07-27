@@ -107,6 +107,10 @@ class SyntheticFieldNode(Node):
         self.declare_parameter('camera_frame', 'camera_optical_frame')
         self.declare_parameter('inspection_goal_topic', '/infrastructure/inspection_goal')
         self.declare_parameter('robot_speed_mps', 0.7)
+        # When true the robot stays parked until it sees a reference scan
+        # (the legacy anchor-first flow). The frontier demo explores before
+        # it scans, so it sets this false to let the robot move at once.
+        self.declare_parameter('require_reference_scan', True)
         self.declare_parameter('image_width', 640)
         self.declare_parameter('image_height', 400)
         self.declare_parameter('focal_length_px', 420.0)
@@ -155,7 +159,10 @@ class SyntheticFieldNode(Node):
         self.robot_x = 0.0
         self.robot_y = 0.0
         self.robot_yaw = 0.0
-        self.first_scan_seen = False
+        self.require_reference_scan = bool(
+            self.get_parameter('require_reference_scan').value
+        )
+        self.first_scan_seen = not self.require_reference_scan
         self.active_goal = None
         self.scan_write_due = None
         self.scan_count = 0

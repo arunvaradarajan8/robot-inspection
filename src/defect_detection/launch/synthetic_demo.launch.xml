@@ -1,26 +1,28 @@
 <?xml version="1.0"?>
 <!--
-  End-to-end demo of the defect detection pipeline on synthetic data.
-  No hardware required: one synthetic node stands in for the OAK-D camera,
-  the YOLO detector, the robot base, and the Trimble X7. Every other node
-  is the real production node.
+  End-to-end demo of the frontier-exploration + scan pipeline on synthetic
+  data. No hardware required: one synthetic node stands in for the OAK-D
+  camera, the robot base, and the Trimble X7. Every other node is the real
+  production node.
 
     ros2 launch defect_detection synthetic_demo.launch.xml
 
-  Flow: synthetic camera + detections -> OAK depth fusion -> 3D detections
-  -> scan decision -> synthetic LAS scan -> scan watcher -> frame anchor
-  -> occupancy map -> frontier/infrastructure planners -> robot goal bridge
-  (dry run) -> simulated robot drives to the goal -> rescans.
+  Flow: synthetic world cloud -> Oak-D occupancy map -> frontier planner
+  drives the simulated robot to map the site -> mission manager ends
+  exploration -> scan planner ranks map vantages by openness/centrality and
+  drives to the best few -> synthetic X7 writes a LAS at each -> mission
+  manager walks the robot home. No object detection anywhere in the loop.
+
+  The whole demo runs in the odom frame the synthetic node publishes, so no
+  localization anchor is needed.
 -->
 <launch>
   <arg name="rviz" default="true"
        description="Open RViz with the demo layout."/>
   <arg name="demo_root" default="/tmp/synthetic_demo"
-       description="Scratch directory for scans, anchor, and defect store."/>
-  <arg name="scan_mode" default="coverage"
-       description="'coverage' explores frontiers and scans at every waypoint."/>
-  <arg name="prefer_defect_rescans" default="true"/>
-  <arg name="planner_hold_for_scan" default="true"/>
+       description="Scratch directory for scans and the mission summary."/>
+  <arg name="exploration_radius_m" default="12.0"
+       description="Bounded exploration for the 16m-wide synthetic wall."/>
   <arg name="digital_twin_accumulate" default="true"/>
   <arg name="digital_twin_use_tf_scan_origin" default="false"/>
 
@@ -29,50 +31,60 @@
         name="synthetic_field_node"
         output="screen">
     <param name="scan_directory" value="$(var demo_root)/trimble_scans"/>
+    <!-- Explore-first: the robot must move before the first scan. -->
+    <param name="require_reference_scan" value="false"/>
+    <param name="scan_frame" value="odom"/>
   </node>
 
   <include file="$(find-pkg-share defect_detection)/launch/defect_detection.launch.xml">
-    <!-- Synthetic node replaces the camera and the YOLO detector. -->
+    <!-- The synthetic node replaces the camera and the robot base. -->
     <arg name="publish_camera" value="false"/>
-    <arg name="detector" value="false"/>
 
-    <!-- Real production nodes under test. -->
-    <arg name="depth_navigation" value="true"/>
+    <!-- Run the whole mission in the frame the synthetic node publishes. -->
+    <arg name="navigation_target_frame" value="odom"/>
+    <arg name="navigation_base_frame" value="base_link"/>
+    <arg name="arrival_base_frame" value="base_link"/>
+    <arg name="trimble_scan_frame" value="odom"/>
+
     <arg name="visualization" value="true"/>
-    <arg name="scan_decision" value="true"/>
-    <!-- The X7 is trigger-only, exactly as in the field: the sim writes a
-         LAS to stand in for the scanner's SD card and nothing reads it. -->
-    <arg name="trimble_scan_watcher" value="false"/>
-    <arg name="trimble_scan_directory" value="$(var demo_root)/trimble_scans"/>
+
+    <!-- Oak-D occupancy map. The synthetic world cloud feeds the long-range
+         cloud source; there is no simulated depth cloud, so that stays off. -->
     <arg name="digital_twin_map" value="true"/>
-    <!-- The synthetic world cloud feeds the long-range cloud source. There
-         is no simulated depth point cloud, so that source stays off here. -->
     <arg name="map_cloud_enabled" value="true"/>
     <arg name="map_cloud_topic" value="/cloud/points"/>
     <arg name="map_depth_enabled" value="false"/>
-    <arg name="frame_anchor" value="false"/>
-    <arg name="anchor_store_path" value="$(var demo_root)/anchor.yaml"/>
-    <arg name="infrastructure_planner" value="true"/>
-    <arg name="mission_manager" value="true"/>
-    <arg name="mission_summary_path" value="$(var demo_root)/mission.yaml"/>
-    <arg name="mission_max_excursion_m" value="12.0"/>
-    <arg name="robot_goal_bridge" value="true"/>
-    <arg name="robot_goal_backend" value="dry_run"/>
-    <arg name="arrival_base_frame" value="base_link"/>
-    <arg name="defect_map" value="true"/>
-    <arg name="defect_map_store_path" value="$(var demo_root)/defects.yaml"/>
-
-    <!-- Demo pacing: rescan sooner and closer than the field defaults;
-         the synthetic wall is only 16m wide. -->
-    <arg name="scan_cooldown_sec" value="45.0"/>
-    <arg name="min_scan_separation_m" value="2.0"/>
-    <arg name="scan_mode" value="$(var scan_mode)"/>
-    <arg name="prefer_defect_rescans" value="$(var prefer_defect_rescans)"/>
-    <arg name="planner_hold_for_scan" value="$(var planner_hold_for_scan)"/>
     <arg name="digital_twin_accumulate"
          value="$(var digital_twin_accumulate)"/>
     <arg name="digital_twin_use_tf_scan_origin"
          value="$(var digital_twin_use_tf_scan_origin)"/>
+
+    <!-- Frontier exploration. -->
+    <arg name="infrastructure_planner" value="true"/>
+    <arg name="exploration_radius_m" value="$(var exploration_radius_m)"/>
+
+    <!-- Scan phase: pick a few well-separated vantages on the small map. -->
+    <arg name="scan_planner" value="true"/>
+    <arg name="scan_max_stations" value="3"/>
+    <arg name="scan_min_separation_m" value="2.0"/>
+    <arg name="scan_openness_radius_m" value="1.5"/>
+    <arg name="scan_min_openness" value="0.4"/>
+    <arg name="scan_centrality_scale_m" value="6.0"/>
+
+    <!-- Mission lifecycle: explore, scan, return home. -->
+    <arg name="mission_manager" value="true"/>
+    <arg name="mission_summary_path" value="$(var demo_root)/mission.yaml"/>
+    <arg name="mission_max_excursion_m" value="12.0"/>
+    <arg name="mission_scan_phase_enabled" value="true"/>
+
+    <!-- Dry-run robot: the simulated base drives to goals over TF. -->
+    <arg name="robot_goal_bridge" value="true"/>
+    <arg name="robot_goal_backend" value="dry_run"/>
+
+    <!-- The X7 is trigger-only, exactly as in the field: the sim writes a
+         LAS to stand in for the scanner's SD card and nothing reads it. -->
+    <arg name="trimble_scan_watcher" value="false"/>
+    <arg name="trimble_scan_directory" value="$(var demo_root)/trimble_scans"/>
 
     <!-- The demo ships its own RViz layout below. -->
     <arg name="rviz" value="false"/>

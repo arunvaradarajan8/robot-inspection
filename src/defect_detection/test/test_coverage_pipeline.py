@@ -1,11 +1,12 @@
+import math
 import os
-import time
 from types import SimpleNamespace
 
 import numpy as np
+from nav_msgs.msg import OccupancyGrid
 import rclpy
 from sensor_msgs_py import point_cloud2
-from std_msgs.msg import Bool, Header, String
+from std_msgs.msg import Bool, Header
 
 from defect_detection.digital_twin.infrastructure_planner import (
     InfrastructurePlanner,
@@ -14,6 +15,7 @@ from defect_detection.digital_twin.mission_manager import (
     AWAITING_UPLOAD,
     EXPLORING,
     RETURNING,
+    SCANNING,
     MissionManager,
 )
 from defect_detection.digital_twin.pointcloud_to_occupancy import (
@@ -22,7 +24,7 @@ from defect_detection.digital_twin.pointcloud_to_occupancy import (
     UNKNOWN,
     PointCloudToOccupancy,
 )
-from defect_detection.digital_twin.scan_decision_node import ScanDecisionNode
+from defect_detection.digital_twin.scan_planner import ScanPlanner
 
 
 def make_cloud(points):
@@ -32,6 +34,20 @@ def make_cloud(points):
         header,
         np.asarray(points, dtype=np.float32),
     )
+
+
+def make_grid(array, resolution=1.0, origin=(0.0, 0.0)):
+    grid = OccupancyGrid()
+    grid.header.frame_id = 'map'
+    height, width = array.shape
+    grid.info.width = width
+    grid.info.height = height
+    grid.info.resolution = resolution
+    grid.info.origin.position.x = float(origin[0])
+    grid.info.origin.position.y = float(origin[1])
+    grid.info.origin.orientation.w = 1.0
+    grid.data = array.reshape(-1).astype(int).tolist()
+    return grid
 
 
 def grid_value_at(message, x, y):
@@ -45,60 +61,7 @@ def source_named(node, name):
     return next(source for source in node.sources if source.name == name)
 
 
-def test_coverage_scan_decision_waits_for_waypoint_arrivals():
-    os.environ['ROS_LOG_DIR'] = '/tmp'
-    rclpy.init()
-    node = ScanDecisionNode()
-    try:
-        node.mode = 'coverage'
-        node.request_initial_scan = True
-
-        should_scan, reason = node.scan_decision(100.0)
-        assert should_scan
-        assert 'initial coverage reference scan' in reason
-
-        node.last_scan_request_time = 100.0
-        should_scan, reason = node.scan_decision(200.0)
-        assert not should_scan
-        assert 'waypoint arrival' in reason
-
-        # Arrival during the cooldown is retained, not dropped.
-        node.arrival_pending = True
-        should_scan, reason = node.scan_decision(110.0)
-        assert not should_scan
-        assert 'cooldown' in reason
-        assert node.arrival_pending
-
-        should_scan, reason = node.scan_decision(200.0)
-        assert should_scan
-        assert 'coverage waypoint reached' in reason
-        assert not node.arrival_pending
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
-
-
-def test_coverage_scan_decision_consumes_arrival_when_too_close():
-    os.environ['ROS_LOG_DIR'] = '/tmp'
-    rclpy.init()
-    node = ScanDecisionNode()
-    try:
-        node.mode = 'coverage'
-        node.last_scan_request_time = 100.0
-        node.scan_positions = [(0.0, 0.0)]
-        node.arrival_pending = True
-
-        should_scan, reason = node.scan_decision(300.0, 1.0, 0.0)
-        assert not should_scan
-        assert 'too close' in reason
-        assert not node.arrival_pending
-
-        node.arrival_pending = True
-        should_scan, _ = node.scan_decision(300.0, 50.0, 0.0)
-        assert should_scan
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+# ---- occupancy grid ----------------------------------------------------
 
 
 def test_occupancy_accumulation_keeps_walls_from_earlier_stations():
@@ -111,13 +74,11 @@ def test_occupancy_accumulation_keeps_walls_from_earlier_stations():
         node.publisher = SimpleNamespace(publish=published.append)
         cloud = source_named(node, 'cloud')
 
-        # Station 1 at the configured origin sees a wall at x=2.
         wall_one = [(2.0, y / 10.0, 0.5) for y in range(-10, 11)]
         node.cloud_callback(cloud, make_cloud(wall_one))
         assert len(published) == 1
         assert grid_value_at(published[0], 2.0, 0.0) == OCCUPIED
 
-        # Station 2 further along sees a different wall at x=8.
         node.scan_origin_x = 6.0
         cloud.last_update = 0.0
         wall_two = [(8.0, y / 10.0, 0.5) for y in range(-10, 11)]
@@ -126,8 +87,6 @@ def test_occupancy_accumulation_keeps_walls_from_earlier_stations():
 
         merged = published[1]
         assert grid_value_at(merged, 8.0, 0.0) == OCCUPIED
-        # The wall from station 1 stays on the accumulated map even
-        # though station 2 never saw it.
         assert grid_value_at(merged, 2.0, 0.0) == OCCUPIED
     finally:
         node.destroy_node()
@@ -146,15 +105,12 @@ def test_depth_rays_do_not_erase_cloud_walls():
         cloud = source_named(node, 'cloud')
         depth = source_named(node, 'depth')
 
-        # The long-range cloud source sees a wall at x=2.
         node.cloud_callback(
             cloud,
             make_cloud([(2.0, y / 10.0, 0.5) for y in range(-10, 11)]),
         )
         assert grid_value_at(published[-1], 2.0, 0.0) == OCCUPIED
 
-        # The depth camera reports a return past that wall, so its ray
-        # crosses the wall cell on the way out.
         node.cloud_callback(
             depth,
             make_cloud([(4.0, y / 10.0, 0.5) for y in range(-3, 4)]),
@@ -177,14 +133,11 @@ def test_either_sensor_clears_unknown_so_it_stops_being_a_frontier():
         node.publisher = SimpleNamespace(publish=published.append)
         depth = source_named(node, 'depth')
 
-        # Only the depth camera observes this patch; the cloud source never does.
         node.cloud_callback(
             depth,
             make_cloud([(3.0, y / 10.0, 0.5) for y in range(-5, 6)]),
         )
         merged = published[-1]
-        # Cells between the origin and the return are free, not unknown,
-        # so the frontier planner will not treat them as unexplored.
         assert grid_value_at(merged, 1.5, 0.0) == FREE
         assert grid_value_at(merged, 1.5, 0.0) != UNKNOWN
     finally:
@@ -208,7 +161,6 @@ def test_decimation_respects_the_per_source_budget():
         )
         kept = node.filter_points(cloud, points, 0.0, 0.0)
         assert len(kept) <= cloud.max_points
-        # A uniform stride keeps both ends of the scan, unlike truncation.
         assert kept[0][0] < 2.0
         assert kept[-1][0] > 18.0
     finally:
@@ -216,42 +168,60 @@ def test_decimation_respects_the_per_source_budget():
         rclpy.shutdown()
 
 
-def test_planner_holds_until_the_scanner_reports_it_finished():
+# ---- frontier exploration ----------------------------------------------
+
+
+def two_cluster_grid():
+    """A map with a near frontier column (x=10) and a far one (x=25)."""
+    width, height = 30, 7
+    data = np.full((height, width), UNKNOWN, dtype=int)
+    data[:, 0:11] = FREE   # known free region; x=10 borders the unknown east
+    data[:, 25] = FREE     # a far free column, unknown on both sides
+    return make_grid(data)
+
+
+def test_frontier_prefers_the_near_cluster_over_a_far_one():
     os.environ['ROS_LOG_DIR'] = '/tmp'
     rclpy.init()
     node = InfrastructurePlanner()
     try:
-        assert not node.scan_hold_active(time.monotonic())
+        node.exploration_radius = 100.0
+        node.min_frontier_cluster_cells = 4
+        node.home = (5.0, 3.0)
+        goal = node.select_frontier(two_cluster_grid(), 5.0, 3.0)
+        assert goal is not None
+        # Both clusters hold seven cells, so the closer one wins on utility.
+        assert goal[0] < 15.0
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
-        node.waypoint_arrived_callback(String())
-        assert node.hold_state == 'decision'
-        assert node.scan_hold_active(time.monotonic())
 
-        scan_required = Bool()
-        scan_required.data = True
-        node.scan_required_callback(scan_required)
-        assert node.hold_state == 'scan'
+def test_frontier_respects_the_exploration_radius():
+    os.environ['ROS_LOG_DIR'] = '/tmp'
+    rclpy.init()
+    node = InfrastructurePlanner()
+    try:
+        node.min_frontier_cluster_cells = 4
+        node.home = (27.0, 3.0)
+        # From a home by the far column, a tight radius hides the near one.
+        node.exploration_radius = 6.0
+        goal = node.select_frontier(two_cluster_grid(), 27.0, 3.0)
+        assert goal is not None
+        assert goal[0] > 20.0
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
-        # Nothing comes back from the X7 over ROS; the Windows bridge
-        # reports completion instead, and that is what releases the hold.
-        node.scan_complete_callback(Bool(data=True))
-        assert node.hold_state is None
 
-        # A declined scan decision releases the hold after settling.
-        node.waypoint_arrived_callback(String())
-        declined = Bool()
-        declined.data = False
-        node.scan_required_callback(declined)
-        assert node.hold_state == 'decision'
-        node.hold_since -= node.scan_decision_settle + 1.0
-        node.scan_required_callback(declined)
-        assert node.hold_state is None
-
-        # A scan that never completes cannot park the robot forever.
-        node.hold_state = 'scan'
-        node.hold_since = time.monotonic() - node.scan_wait_timeout - 1.0
-        assert not node.scan_hold_active(time.monotonic())
-        assert node.hold_state is None
+def test_frontier_returns_none_on_a_fully_known_map():
+    os.environ['ROS_LOG_DIR'] = '/tmp'
+    rclpy.init()
+    node = InfrastructurePlanner()
+    try:
+        node.home = (1.0, 1.0)
+        data = np.full((5, 5), FREE, dtype=int)
+        assert node.select_frontier(make_grid(data), 1.0, 1.0) is None
     finally:
         node.destroy_node()
         rclpy.shutdown()
@@ -277,6 +247,73 @@ def test_planner_stops_exploring_when_the_mission_manager_says_so():
         rclpy.shutdown()
 
 
+# ---- scan vantage selection --------------------------------------------
+
+
+def test_scan_stations_are_open_central_and_separated():
+    os.environ['ROS_LOG_DIR'] = '/tmp'
+    rclpy.init()
+    node = ScanPlanner()
+    try:
+        node.max_scan_stations = 2
+        node.min_scan_separation = 5.0
+        node.min_openness = 0.4
+        node.openness_radius = 1.5
+        node.centrality_scale = 8.0
+
+        width, height = 24, 24
+        data = np.full((height, width), FREE, dtype=int)
+        data[11:13, 11:13] = OCCUPIED  # a compact structure to inspect
+        grid = make_grid(data)
+
+        stations = node.select_scan_stations(grid)
+        assert 1 <= len(stations) <= 2
+        for x, y, _ in stations:
+            # Stations sit on free space, never on the structure itself.
+            assert grid_value_at(grid, x, y) == FREE
+        if len(stations) == 2:
+            (x0, y0, _), (x1, y1, _) = stations
+            assert math.hypot(x0 - x1, y0 - y1) >= node.min_scan_separation
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+def test_scan_stations_empty_without_structure():
+    os.environ['ROS_LOG_DIR'] = '/tmp'
+    rclpy.init()
+    node = ScanPlanner()
+    try:
+        data = np.full((10, 10), FREE, dtype=int)
+        assert node.select_scan_stations(make_grid(data)) == []
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+# ---- mission lifecycle -------------------------------------------------
+
+
+def test_mission_manager_scans_before_returning_home():
+    os.environ['ROS_LOG_DIR'] = '/tmp'
+    rclpy.init()
+    node = MissionManager()
+    try:
+        node.scan_phase_enabled = True
+        node.start_pose = (0.0, 0.0, 0.0)
+
+        node.begin_scanning('excursion limit reached')
+        assert node.state == SCANNING
+
+        node.scanning_complete_callback(Bool(data=True))
+        assert node.state == RETURNING
+        # The wrap-up reason is why exploration ended, not the hand-off.
+        assert node.end_reason == 'excursion limit reached'
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
 def test_mission_manager_retraces_breadcrumbs_in_reverse():
     os.environ['ROS_LOG_DIR'] = '/tmp'
     rclpy.init()
@@ -290,7 +327,6 @@ def test_mission_manager_retraces_breadcrumbs_in_reverse():
 
         node.begin_return('test')
         assert node.state == RETURNING
-        # Newest station first, start pose last.
         assert [round(x, 1) for x, _, _ in node.return_queue] == [
             9.0,
             6.0,
@@ -333,7 +369,6 @@ def test_mission_manager_waits_for_the_e57_upload_before_completing():
         node.begin_return('test')
         node.return_queue = []
         node.return_tick()
-        # Home, but the mission stays open until the scanner's E57 lands.
         assert node.state == AWAITING_UPLOAD
 
         node.upload_complete_callback(Bool(data=True))

@@ -3,7 +3,7 @@
 <package format="3">
   <name>defect_detection</name>
   <version>0.1.0</version>
-  <description>ROS 2 nodes for camera, depth-camera point clouds, defect detection, and 3D detection fusion.</description>
+  <description>ROS 2 nodes for depth-camera occupancy mapping, frontier exploration, map-vantage scan planning, and Trimble X7 inspection missions.</description>
   <maintainer email="arunvaradarajan3@gmail.com">avaradar</maintainer>
   <license>Apache-2.0</license>
 

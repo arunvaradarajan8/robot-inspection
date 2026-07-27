@@ -12,6 +12,7 @@ import yaml
 
 
 EXPLORING = 'EXPLORING'
+SCANNING = 'SCANNING'
 RETURNING = 'RETURNING'
 AWAITING_UPLOAD = 'AWAITING_UPLOAD'
 COMPLETE = 'COMPLETE'
@@ -31,10 +32,15 @@ class MissionManager(Node):
     """Own the mission lifecycle and bring the robot home when it ends.
 
     The inspection planner only ever proposes the next place to look. This
-    node decides when looking is finished, then walks the robot back along
-    the stations it already visited to the pose it started from, and holds
-    the mission open until the operator has uploaded the Trimble E57 that
-    stayed on the scanner's SD card during the run.
+    node decides when looking is finished. It then hands control to the
+    scan planner, which picks the best vantages on the finished map and
+    takes the X7 scans there; once scanning reports done, it walks the
+    robot back along the stations it already visited to the pose it started
+    from, and holds the mission open until the operator has uploaded the
+    Trimble E57 that stayed on the scanner's SD card during the run.
+
+    The lifecycle is EXPLORING -> SCANNING -> RETURNING -> AWAITING_UPLOAD
+    -> COMPLETE.
     """
 
     def __init__(self):
@@ -58,6 +64,18 @@ class MissionManager(Node):
         self.declare_parameter('state_topic', '/mission/state')
         self.declare_parameter('return_home_topic', '/mission/return_home')
         self.declare_parameter('upload_complete_topic', '/mission/upload_complete')
+        # Scan phase: when exploration ends, hand off to the scan planner
+        # rather than walking straight home. Turn off to scan-less missions
+        # that explore and return.
+        self.declare_parameter('scan_phase_enabled', True)
+        self.declare_parameter('start_scanning_topic', '/mission/start_scanning')
+        self.declare_parameter(
+            'scanning_complete_topic',
+            '/mission/scanning_complete',
+        )
+        # Give up on the scan phase and walk home if the scan planner never
+        # reports back (e.g. every station timed out).
+        self.declare_parameter('scanning_timeout_sec', 600.0)
         self.declare_parameter('summary_path', '/tmp/mission_summary.yaml')
         # Mission end conditions. Any one of them ends exploration.
         self.declare_parameter('max_stations', 0)
@@ -97,6 +115,18 @@ class MissionManager(Node):
         upload_complete_topic = self.get_parameter(
             'upload_complete_topic'
         ).get_parameter_value().string_value
+        self.scan_phase_enabled = self.get_parameter(
+            'scan_phase_enabled'
+        ).get_parameter_value().bool_value
+        start_scanning_topic = self.get_parameter(
+            'start_scanning_topic'
+        ).get_parameter_value().string_value
+        scanning_complete_topic = self.get_parameter(
+            'scanning_complete_topic'
+        ).get_parameter_value().string_value
+        self.scanning_timeout = self.get_parameter(
+            'scanning_timeout_sec'
+        ).get_parameter_value().double_value
         self.summary_path = Path(
             self.get_parameter('summary_path').get_parameter_value().string_value
         ).expanduser()
@@ -134,6 +164,17 @@ class MissionManager(Node):
             allow_exploration_topic,
             10,
         )
+        self.start_scanning_publisher = self.create_publisher(
+            Bool,
+            start_scanning_topic,
+            10,
+        )
+        self.create_subscription(
+            Bool,
+            scanning_complete_topic,
+            self.scanning_complete_callback,
+            10,
+        )
         self.create_subscription(
             String,
             waypoint_arrived_topic,
@@ -169,6 +210,7 @@ class MissionManager(Node):
         self.return_goal_pending = False
         self.no_frontier_since = None
         self.end_reason = None
+        self.scanning_started = 0.0
 
         self.timer = self.create_timer(max(0.1, tick_period), self.tick)
         self.get_logger().info(
@@ -203,6 +245,10 @@ class MissionManager(Node):
         if message.data and self.state == EXPLORING:
             self.begin_return('operator requested return home')
 
+    def scanning_complete_callback(self, message):
+        if message.data and self.state == SCANNING:
+            self.begin_return('scanning complete')
+
     def upload_complete_callback(self, message):
         if message.data and self.state == AWAITING_UPLOAD:
             self.state = COMPLETE
@@ -219,6 +265,8 @@ class MissionManager(Node):
 
         if self.state == EXPLORING:
             self.explore_tick()
+        elif self.state == SCANNING:
+            self.scanning_tick()
         elif self.state == RETURNING:
             self.return_tick()
 
@@ -235,7 +283,10 @@ class MissionManager(Node):
 
         reason = self.end_condition(pose)
         if reason is not None:
-            self.begin_return(reason)
+            if self.scan_phase_enabled:
+                self.begin_scanning(reason)
+            else:
+                self.begin_return(reason)
 
     def end_condition(self, pose):
         if self.max_stations > 0 and len(self.stations) >= self.max_stations:
@@ -266,8 +317,33 @@ class MissionManager(Node):
 
         return None
 
-    def begin_return(self, reason):
+    def begin_scanning(self, reason):
         self.end_reason = reason
+        self.state = SCANNING
+        self.scanning_started = time.monotonic()
+        self.get_logger().info(
+            f'Exploration finished ({reason}); handing off to the scan '
+            'planner to capture the X7 scans'
+        )
+
+    def scanning_tick(self):
+        # Keep asking the scan planner to run; it ignores repeats once it is
+        # underway, and a late-starting node still catches the request.
+        self.start_scanning_publisher.publish(Bool(data=True))
+        if (
+            self.scanning_timeout > 0.0
+            and time.monotonic() - self.scanning_started >= self.scanning_timeout
+        ):
+            self.get_logger().warning(
+                'Scan phase timed out; walking home without waiting for it'
+            )
+            self.begin_return('scan phase timed out')
+
+    def begin_return(self, reason):
+        # Preserve the reason exploration ended; the scan phase completing
+        # is a transition, not the reason the mission wrapped up.
+        if self.end_reason is None:
+            self.end_reason = reason
         self.state = RETURNING
         # Retrace the stations in reverse, then finish at the start pose.
         self.return_queue = list(reversed(self.breadcrumbs))

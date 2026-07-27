@@ -4,11 +4,12 @@ set -euo pipefail
 usage() {
   echo "Usage: $0 [mission|demo|slam|transport|full] [--sim gazebo|synthetic]"
   echo
-  echo "  mission          The field pipeline: the depth camera builds the"
-  echo "                   map, the planner visits defects"
-  echo "                   first and frontiers otherwise, the Trimble X7 is"
-  echo "                   triggered at each stop, and the robot walks back"
-  echo "                   to its start pose before waiting for the E57."
+  echo "  mission          The field pipeline: the Oak-D depth camera builds"
+  echo "                   the map, the planner explores frontiers to map a"
+  echo "                   bounded radius efficiently, the scan planner then"
+  echo "                   picks the best vantages and triggers the Trimble"
+  echo "                   X7 there, and the robot walks back to its start"
+  echo "                   pose before waiting for the E57."
   echo "  slam             OAK-only depth-camera RGBD SLAM: RTAB-Map owns the"
   echo "                   map->odom->base_link chain, building its own internal"
   echo "                   map with loop closure from the depth camera alone."
@@ -74,23 +75,18 @@ fi
 source "${WORKSPACE_ROOT}/install/setup.bash"
 
 export ROS_LOG_DIR="${ROS_LOG_DIR:-${WORKSPACE_ROOT}/log/field}"
-export YOLO_CONFIG_DIR="${YOLO_CONFIG_DIR:-${WORKSPACE_ROOT}/.runtime/ultralytics}"
-mkdir -p "${ROS_LOG_DIR}" "${YOLO_CONFIG_DIR}"
+mkdir -p "${ROS_LOG_DIR}"
 
 cd "${WORKSPACE_ROOT}"
 
-# Mission mode: defects first, frontiers as the fallback, a scan at every
-# stop, one accumulated map fused from both sensors, and a managed return
-# to the start pose at the end.
+# Mission mode: frontier exploration of a bounded radius, then the scan
+# planner picks the best vantages and scans, with a managed return to the
+# start pose at the end.
 MISSION_ARGS=()
 if [[ "${MODE}" == "mission" ]]; then
   MISSION_ARGS+=(
-    scan_mode:=coverage
-    prefer_defect_rescans:=true
-    planner_hold_for_scan:=true
     digital_twin_accumulate:=true
     digital_twin_use_tf_scan_origin:=true
-    mission_manager:=true
   )
 fi
 
@@ -182,8 +178,8 @@ WARNING
     anchor_yaw_deg:="${DEMO_ANCHOR_YAW_DEG:-0.0}" \
     demo_root:="${DEMO_ROOT}" \
     mission_max_excursion_m:="${DEMO_MAX_EXCURSION_M:-20.0}" \
-    min_scan_separation_m:="${DEMO_MIN_SCAN_SEPARATION_M:-4.0}" \
-    scan_cooldown_sec:="${DEMO_SCAN_COOLDOWN_SEC:-45.0}" \
+    exploration_radius_m:="${DEMO_EXPLORATION_RADIUS_M:-20.0}" \
+    scan_min_separation_m:="${DEMO_SCAN_MIN_SEPARATION_M:-4.0}" \
     spot_localization:="${SPOT_LOCALIZATION:-true}" \
     spot_frame:="${SPOT_FRAME:-vision}" \
     spot_ip:="${SPOT_IP:-}" \
@@ -200,34 +196,24 @@ WARNING
     rviz:="${ENABLE_RVIZ:-true}"
 fi
 
-detector=false
-depth_navigation="${DEPTH_NAVIGATION:-false}"
 depth_localization="${DEPTH_LOCALIZATION:-false}"
-scan_mode="${SCAN_MODE:-coverage}"
-prefer_defect_rescans="${PREFER_DEFECT_RESCANS:-true}"
-planner_hold_for_scan="${PLANNER_HOLD_FOR_SCAN:-true}"
 accumulate="${DIGITAL_TWIN_ACCUMULATE:-true}"
 use_tf_scan_origin="${DIGITAL_TWIN_USE_TF_SCAN_ORIGIN:-true}"
 spot_localization="${SPOT_LOCALIZATION:-false}"
 mission_manager="${MISSION_MANAGER:-false}"
 map_depth_enabled="${MAP_DEPTH_ENABLED:-false}"
 robot_world_frame="${ROBOT_WORLD_FRAME:-vision}"
-defect_map="${DEFECT_MAP:-true}"
 fused_localization="${FUSED_LOCALIZATION:-false}"
-if [[ "${MODE}" == "full" ]]; then
-  detector=true
-elif [[ "${MODE}" == "mission" ]]; then
+if [[ "${MODE}" == "mission" ]]; then
   # The field pipeline. Spot's vision frame localizes the mission, the
-  # depth camera builds the occupancy map, YOLO finds defects worth a
-  # closer Trimble scan, and the mission manager walks the robot home
-  # when there is nothing left to visit.
-  detector=true
-  depth_navigation="${DEPTH_NAVIGATION:-true}"
+  # Oak-D depth camera builds the occupancy map, the planner explores
+  # frontiers to map a bounded radius, the scan planner then picks the best
+  # vantages and triggers the X7, and the mission manager walks the robot
+  # home. No object detection is involved in where the robot goes.
   depth_localization=false
   spot_localization="${SPOT_LOCALIZATION:-true}"
   mission_manager="${MISSION_MANAGER:-true}"
   map_depth_enabled="${MAP_DEPTH_ENABLED:-true}"
-  defect_map="${DEFECT_MAP:-true}"
 fi
 
 # Fused localization: an EKF blends Spot vision pose + navX IMU + depth
@@ -248,18 +234,7 @@ exec ros2 launch pointcloud_bridge full_pipeline.launch.xml \
   camera_index:="${CAMERA_INDEX:-0}" \
   camera_frame:="${CAMERA_FRAME:-camera_optical_frame}" \
   cloud_frame:="${CLOUD_FRAME:-cloud}" \
-  dataset_path:="${DATASET_PATH:-}" \
-  model_path:="${MODEL_PATH:-}" \
   image_topic:="${IMAGE_TOPIC:-/ros2_image}" \
-  detections_2d_topic:="${DETECTIONS_2D_TOPIC:-/detections_2d}" \
-  detections_3d_topic:="${DETECTIONS_3D_TOPIC:-/detections_3d}" \
-  detector:="${detector}" \
-  depth_navigation:="${depth_navigation}" \
-  depth_topic:="${DEPTH_TOPIC:-/oak/rgb/depth}" \
-  depth_camera_info_topic:="${DEPTH_CAMERA_INFO_TOPIC:-/oak/rgb/camera_info}" \
-  depth_minimum_confidence:="${DEPTH_MINIMUM_CONFIDENCE:-0.50}" \
-  depth_bbox_padding_px:="${DEPTH_BBOX_PADDING_PX:-4}" \
-  depth_default_bbox_size_m:="${DEPTH_DEFAULT_BBOX_SIZE_M:-0.20}" \
   depth_localization:="${depth_localization}" \
   depth_odom_topic:="${DEPTH_ODOM_TOPIC:-/oak/odom}" \
   depth_odom_frame:="${DEPTH_ODOM_FRAME:-depth_odom}" \
@@ -275,12 +250,6 @@ exec ros2 launch pointcloud_bridge full_pipeline.launch.xml \
   trimble_windows_bridge:="${TRIMBLE_WINDOWS_BRIDGE:-false}" \
   trimble_windows_url:="${TRIMBLE_WINDOWS_URL:-http://127.0.0.1:8765}" \
   trimble_reference_scan_on_start:="${TRIMBLE_REFERENCE_SCAN_ON_START:-true}" \
-  scan_decision:="${SCAN_DECISION:-true}" \
-  scan_mode:="${scan_mode}" \
-  scan_confidence_threshold:="${SCAN_CONFIDENCE_THRESHOLD:-0.65}" \
-  scan_min_detections:="${SCAN_MIN_DETECTIONS:-1}" \
-  scan_cooldown_sec:="${SCAN_COOLDOWN_SEC:-60.0}" \
-  min_scan_separation_m:="${MIN_SCAN_SEPARATION_M:-10.0}" \
   digital_twin_map:="${DIGITAL_TWIN_MAP:-true}" \
   digital_twin_accumulate:="${accumulate}" \
   digital_twin_use_tf_scan_origin:="${use_tf_scan_origin}" \
@@ -298,9 +267,15 @@ exec ros2 launch pointcloud_bridge full_pipeline.launch.xml \
   auto_anchor_on_first_scan:="${AUTO_ANCHOR_ON_FIRST_SCAN:-true}" \
   infrastructure_planner:="${INFRASTRUCTURE_PLANNER:-true}" \
   infrastructure_goal_cooldown_sec:="${INFRASTRUCTURE_GOAL_COOLDOWN_SEC:-20.0}" \
-  prefer_defect_rescans:="${prefer_defect_rescans}" \
-  planner_hold_for_scan:="${planner_hold_for_scan}" \
-  planner_scan_wait_timeout_sec:="${PLANNER_SCAN_WAIT_TIMEOUT_SEC:-300.0}" \
+  exploration_radius_m:="${EXPLORATION_RADIUS_M:-40.0}" \
+  planner_travel_decay_m:="${PLANNER_TRAVEL_DECAY_M:-8.0}" \
+  scan_planner:="${SCAN_PLANNER:-true}" \
+  scan_max_stations:="${SCAN_MAX_STATIONS:-3}" \
+  scan_min_separation_m:="${SCAN_MIN_SEPARATION_M:-8.0}" \
+  scan_openness_radius_m:="${SCAN_OPENNESS_RADIUS_M:-3.0}" \
+  scan_min_openness:="${SCAN_MIN_OPENNESS:-0.6}" \
+  scan_centrality_scale_m:="${SCAN_CENTRALITY_SCALE_M:-10.0}" \
+  scan_wait_timeout_sec:="${SCAN_WAIT_TIMEOUT_SEC:-300.0}" \
   spot_localization:="${spot_localization}" \
   spot_frame:="${SPOT_FRAME:-vision}" \
   spot_odom_topic:="${SPOT_ODOM_TOPIC:-/spot/odom}" \
@@ -315,7 +290,7 @@ exec ros2 launch pointcloud_bridge full_pipeline.launch.xml \
   mission_manager:="${mission_manager}" \
   mission_summary_path:="${MISSION_SUMMARY_PATH:-/tmp/mission_summary.yaml}" \
   mission_max_stations:="${MISSION_MAX_STATIONS:-0}" \
-  mission_max_excursion_m:="${MISSION_MAX_EXCURSION_M:-30.0}" \
+  mission_max_excursion_m:="${MISSION_MAX_EXCURSION_M:-40.0}" \
   mission_duration_sec:="${MISSION_DURATION_SEC:-0.0}" \
   mission_home_position_tolerance_m:="${MISSION_HOME_POSITION_TOLERANCE_M:-1.0}" \
   trimble_scan_timeout_sec:="${TRIMBLE_SCAN_TIMEOUT_SEC:-300.0}" \
@@ -334,5 +309,4 @@ exec ros2 launch pointcloud_bridge full_pipeline.launch.xml \
   arrival_base_frame:="${ARRIVAL_BASE_FRAME:-body}" \
   arrival_position_tolerance_m:="${ARRIVAL_POSITION_TOLERANCE_M:-0.35}" \
   arrival_yaw_tolerance_rad:="${ARRIVAL_YAW_TOLERANCE_RAD:-0.45}" \
-  arrival_stable_sec:="${ARRIVAL_STABLE_SEC:-1.5}" \
-  defect_map:="${defect_map}"
+  arrival_stable_sec:="${ARRIVAL_STABLE_SEC:-1.5}"

@@ -3,7 +3,7 @@
   Fused localization only: Spot vision pose + navX IMU + depth-camera VIO,
   blended by a robot_localization EKF into one vision -> body transform.
 
-  Brings up just the localization nodes (no YOLO, map, planner, or Trimble)
+  Brings up just the localization nodes (no map, planner, or Trimble)
   so the fused estimate and the TF tree can be verified before wiring it
   into a full mission. Once it checks out, enable it in the mission with
   FUSED_LOCALIZATION=true in config/field.env.
@@ -45,14 +45,11 @@
        bridge streams odometry (publish_tf=false); the EKF owns the TF. -->
   <include file="$(find-pkg-share defect_detection)/launch/defect_detection.launch.xml">
     <arg name="publish_camera" value="false"/>
-    <arg name="detector" value="false"/>
-    <arg name="depth_navigation" value="false"/>
     <arg name="visualization" value="false"/>
     <arg name="infrastructure_planner" value="false"/>
     <arg name="digital_twin_map" value="false"/>
-    <arg name="scan_decision" value="false"/>
+    <arg name="scan_planner" value="false"/>
     <arg name="mission_manager" value="false"/>
-    <arg name="defect_map" value="false"/>
 
     <arg name="spot_localization" value="true"/>
     <arg name="spot_frame" value="$(var spot_frame)"/>

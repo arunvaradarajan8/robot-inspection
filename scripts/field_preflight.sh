@@ -38,8 +38,8 @@ check_file() {
 }
 
 # SLAM mode is self-contained: the OAK depth camera plus RTAB-Map, with no
-# Spot, no Trimble, and no YOLO. Check only what that path needs, then stop
-# before the Spot/Trimble/webcam checks that do not apply.
+# Spot and no Trimble. Check only what that path needs, then stop before the
+# Spot/Trimble/webcam checks that do not apply.
 if [[ "${MODE}" == "slam" ]]; then
   if ros2 pkg prefix rtabmap_slam >/dev/null 2>&1; then
     printf 'OK:   rtabmap_slam is installed\n'
@@ -172,28 +172,6 @@ PY
       printf 'OK:   Spot is reachable at %s\n' "${SPOT_IP}"
     else
       printf 'FAIL: Spot did not answer at %s\n' "${SPOT_IP}"
-      failures=$((failures + 1))
-    fi
-  fi
-fi
-
-if [[ "${MODE}" == "mission" || "${MODE}" == "full" ]]; then
-  check_file 'YOLO model' "${MODEL_PATH:-}"
-  check_file 'dataset configuration' "${DATASET_PATH:-}"
-  if [[ -f "${DATASET_PATH:-}" ]]; then
-    if python3 - "${DATASET_PATH}" <<'PY'
-import sys
-import yaml
-
-with open(sys.argv[1], encoding='utf-8') as stream:
-    dataset = yaml.safe_load(stream) or {}
-if not dataset.get('names'):
-    raise SystemExit(1)
-PY
-    then
-      printf 'OK:   dataset contains class names\n'
-    else
-      printf 'FAIL: dataset names list is empty\n'
       failures=$((failures + 1))
     fi
   fi

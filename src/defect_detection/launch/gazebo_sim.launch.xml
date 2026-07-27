@@ -5,9 +5,10 @@
     ros2 launch defect_detection gazebo_sim.launch.xml
 
   Gazebo simulates the robot, the OAK-D RGBD camera, and the inspection
-  site (world generated from the shared synthetic-world constants).
-  Ground-truth sim nodes stand in for YOLO and the Trimble X7; every other
-  node is the real production node, running on /clock sim time.
+  site (world generated from the shared synthetic-world constants). A
+  ground-truth sim node stands in for the Trimble X7; every other node is
+  the real production node, running on /clock sim time. Navigation is
+  frontier exploration then map-vantage scanning - no object detection.
 
   Requires: sudo apt install ros-jazzy-ros-gz
 -->
@@ -17,13 +18,11 @@
   <arg name="gui" default="true"
        description="Run the Gazebo GUI; false runs the sim server headless."/>
   <arg name="demo_root" default="/tmp/synthetic_demo"
-       description="Scratch directory for scans, anchor, and defect store."/>
+       description="Scratch directory for scans and the mission summary."/>
   <arg name="world"
        default="$(find-pkg-share defect_detection)/worlds/inspection_site.sdf"/>
-  <arg name="scan_mode" default="coverage"
-       description="'coverage' explores frontiers and scans at every waypoint."/>
-  <arg name="prefer_defect_rescans" default="true"/>
-  <arg name="planner_hold_for_scan" default="true"/>
+  <arg name="exploration_radius_m" default="12.0"
+       description="Bounded exploration for the 16m-wide simulated wall."/>
   <arg name="digital_twin_accumulate" default="true"/>
   <arg name="digital_twin_use_tf_scan_origin" default="false"/>
 
@@ -53,12 +52,7 @@
         args="--x 0.25 --y 0 --z 0.65 --roll -1.5708 --pitch 0 --yaw -1.5708 --frame-id base_link --child-frame-id camera_optical_frame"
         output="screen"/>
 
-  <!-- Sim stand-ins: YOLO, Trimble X7, and the robot's motion backend. -->
-  <node pkg="defect_detection"
-        exec="sim_detection_node"
-        name="sim_detection_node"
-        output="screen"/>
-
+  <!-- Sim stand-ins: the Trimble X7 and the robot's motion backend. -->
   <node pkg="defect_detection"
         exec="sim_scan_node"
         name="sim_scan_node"
@@ -74,10 +68,7 @@
   <!-- The real production pipeline. -->
   <include file="$(find-pkg-share defect_detection)/launch/defect_detection.launch.xml">
     <arg name="publish_camera" value="false"/>
-    <arg name="detector" value="false"/>
-    <arg name="depth_navigation" value="true"/>
     <arg name="visualization" value="true"/>
-    <arg name="scan_decision" value="true"/>
     <!-- Trigger-only X7, as in the field: the sim writes a LAS to stand in
          for the scanner's SD card and nothing reads it back. -->
     <arg name="trimble_scan_watcher" value="false"/>
@@ -90,22 +81,21 @@
     <arg name="map_depth_enabled" value="false"/>
     <arg name="frame_anchor" value="false"/>
     <arg name="anchor_store_path" value="$(var demo_root)/anchor.yaml"/>
+
+    <!-- Frontier exploration, then map-vantage scanning, then walk home. -->
     <arg name="infrastructure_planner" value="true"/>
+    <arg name="exploration_radius_m" value="$(var exploration_radius_m)"/>
+    <arg name="scan_planner" value="true"/>
+    <!-- The sim wall is only 16m wide; tighten vantage spacing. -->
+    <arg name="scan_min_separation_m" value="2.0"/>
+    <arg name="scan_openness_radius_m" value="1.5"/>
+    <arg name="scan_min_openness" value="0.4"/>
     <arg name="mission_manager" value="true"/>
     <arg name="mission_summary_path" value="$(var demo_root)/mission.yaml"/>
     <arg name="mission_max_excursion_m" value="12.0"/>
     <arg name="robot_goal_bridge" value="true"/>
     <arg name="robot_goal_backend" value="dry_run"/>
     <arg name="arrival_base_frame" value="base_link"/>
-    <arg name="defect_map" value="true"/>
-    <arg name="defect_map_store_path" value="$(var demo_root)/defects.yaml"/>
-    <arg name="scan_cooldown_sec" value="45.0"/>
-    <!-- The sim wall is only 16m wide; the 10m field default would block
-         scanning adjacent defects. -->
-    <arg name="min_scan_separation_m" value="2.0"/>
-    <arg name="scan_mode" value="$(var scan_mode)"/>
-    <arg name="prefer_defect_rescans" value="$(var prefer_defect_rescans)"/>
-    <arg name="planner_hold_for_scan" value="$(var planner_hold_for_scan)"/>
     <arg name="digital_twin_accumulate"
          value="$(var digital_twin_accumulate)"/>
     <arg name="digital_twin_use_tf_scan_origin"

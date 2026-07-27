@@ -1,33 +1,38 @@
 # Autonomous Infrastructure Inspection
 
 ROS 2 workspace for autonomous infrastructure inspection on Boston Dynamics
-Spot: the robot explores a site on its own, walks up to defects it spots,
-triggers a Trimble X7 scan at every stop, and returns to where it started.
+Spot: the robot maps a site on its own with the depth camera, works out the
+best places to scan from the map it built, triggers a Trimble X7 scan at each,
+and returns to where it started.
 
 ## The Pipeline
 
 ```text
-depth camera ──┬─► occupancy map ─► frontier goals ───────────┐
-               │                                              │
-               └─► YOLO ─► 3D defects ─► defect standoff goals ┤
-                                     (preferred)              │
-                                                       inspection goal
-                                                              │
-                                                              ▼
-                                                    Spot SE2 walk command
-                                                    (Spot's own onboard
-                                                     obstacle avoidance runs)
-                                                              │
-                                                              ▼
-                                              arrival verified over TF
-                                                              │
-                                                              ▼
-                                          app triggers an X7 scan; the robot
-                                          stands still until it finishes
-                                                              │
-                                                              ▼
-                                       mission ends ─► walk back to the start
-                                                    ─► wait for the E57 upload
+Oak-D depth camera ─► occupancy map ─┬─► PHASE 1  frontier goals
+                                     │   (explore a bounded radius,
+                                     │    fastest-payoff frontier first)
+                                     │
+                                     └─► PHASE 2  scan-vantage goals
+                                         (rank free cells by openness ×
+                                          centrality, scan the best few)
+                                                       │
+                                                inspection goal
+                                                       │
+                                                       ▼
+                                             Spot SE2 walk command
+                                             (Spot's own onboard
+                                              obstacle avoidance runs)
+                                                       │
+                                                       ▼
+                                       arrival verified over TF
+                                                       │
+                                                       ▼ (phase 2 only)
+                                   app triggers an X7 scan; the robot
+                                   stands still until it finishes
+                                                       │
+                                                       ▼
+                                mission ends ─► walk back to the start
+                                             ─► wait for the E57 upload
 ```
 
 Three properties define this design:
@@ -37,15 +42,19 @@ writes its scans to its own SD card. Nothing it produces feeds localization,
 mapping, or planning during the mission. The operator uploads the E57 at the
 end, once the robot is home.
 
-**The depth camera builds the map.** Its point cloud is fused into one
-accumulated occupancy grid; a cell is only unknown when the camera has never
-seen it, so the frontier planner explores real terrain instead of blind spots.
-(The simulator and demo feed a long-range synthetic cloud through the same
+**The depth camera builds the map — nothing else.** The Oak-D point cloud is
+fused into one accumulated occupancy grid; a cell is only unknown when the
+camera has never seen it, so the frontier planner explores real terrain instead
+of blind spots. (The simulator and demo feed a synthetic cloud through the same
 map source in place of a real camera.)
 
-**Defects come first.** When YOLO has found something, the planner walks to a
-standoff distance from it so the X7 captures it closely. Only when there is
-nothing to revisit does it fall back to frontier exploration.
+**Explore first, then scan — no object detection.** Where the robot goes
+depends only on the shape of the map. Phase 1 sweeps a bounded radius, always
+choosing the frontier with the best payoff-per-metre so mapping is
+time-efficient. Phase 2 runs once the map is as complete as it will get: it
+scores every free cell the robot could stand on by *openness* (clearance and
+sightlines for the tripod) times *centrality* (closeness to the mapped
+structure) and takes the X7 scans at the best few well-separated cells.
 
 Run it:
 
@@ -80,13 +89,12 @@ Imu topic or by reading a navX over USB/UART. See the EKF inputs in
 `config/ekf.yaml` and `launch/fused_localization.launch.xml`, and verify the
 TF tree on the Jetson before relying on it.
 
-**Depth camera.** Any depth camera works; the defaults match a Luxonis OAK
-running `depthai_ros`. It supplies RGB for YOLO, aligned depth to turn 2D
-boxes into 3D defect positions, and a point cloud for the near field of the
-occupancy map. This workspace does not launch the camera driver — point
-`DEPTH_TOPIC`, `DEPTH_CAMERA_INFO_TOPIC`, and `MAP_DEPTH_POINTS_TOPIC` at
-whatever your driver publishes. If the driver only publishes a depth image,
-run `depth_image_proc` to produce the point cloud.
+**Depth camera (Oak-D Pro).** The only sensor that builds the map. Any depth
+camera works; the defaults match a Luxonis OAK running `depthai_ros`. It
+supplies the point cloud that fills in the occupancy grid. This workspace does
+not launch the camera driver — point `MAP_DEPTH_POINTS_TOPIC` at whatever your
+driver publishes. If the driver only publishes a depth image, run
+`depth_image_proc` to produce the point cloud.
 
 **Trimble X7.** Not controlled directly. Trimble Perspective runs it from a
 Windows tablet or laptop, and the checked-in bridge app exposes an HTTP API so
@@ -101,34 +109,40 @@ clients. The Windows host runs Perspective and the bridge app.
 
 | State | What happens |
 |---|---|
-| `EXPLORING` | The planner picks goals; every arrival is recorded as a breadcrumb. |
-| `RETURNING` | Exploration is gated off and the recorded stations are replayed in reverse, ending at the start pose. |
+| `EXPLORING` | The frontier planner picks goals; every arrival is recorded as a breadcrumb. |
+| `SCANNING` | Exploration is gated off; the scan planner drives to its chosen vantages and triggers the X7 at each. |
+| `RETURNING` | The recorded stations are replayed in reverse, ending at the start pose. |
 | `AWAITING_UPLOAD` | The robot is home. The mission stays open until the E57 is filed. |
 | `COMPLETE` | Mission summary written. |
 
-Exploration ends on whichever comes first: no frontier left, the station limit,
-the excursion limit (`MISSION_MAX_EXCURSION_M`, default 30 m), a duration cap,
-or an operator command on `/mission/return_home`. A mission summary — start
-pose, every station, timings — is written to `MISSION_SUMMARY_PATH`.
+Exploration ends on whichever comes first: no frontier left inside the
+exploration radius, the station limit, the excursion limit
+(`MISSION_MAX_EXCURSION_M`, default 40 m), a duration cap, or an operator
+command on `/mission/return_home`. The mission then enters `SCANNING`; when the
+scan planner reports done on `/mission/scanning_complete` (or the scan phase
+times out), the robot walks home. A mission summary — start pose, every
+station, timings — is written to `MISSION_SUMMARY_PATH`.
 
-The planner and the mission manager both publish to
-`/infrastructure/inspection_goal`, and `/mission/allow_exploration` guarantees
-only one of them is doing so at a time.
+The frontier planner, the scan planner, and the mission manager all publish to
+`/infrastructure/inspection_goal`. `/mission/allow_exploration` (frontier
+planner) and `/mission/start_scanning` (scan planner) guarantee only one of
+them is driving at a time.
 
-## Scan Triggering
+## Scan Planning
 
-`scan_decision_node` runs in `coverage` mode by default, meaning it requests a
-scan wherever the planner parked the robot — the planner already decided the
-stop was worth making. Scans are still paced by `SCAN_COOLDOWN_SEC` and
-`MIN_SCAN_SEPARATION_M`, so the robot must move meaningfully between stations.
-Set `SCAN_MODE=detection` to additionally require live high-confidence
-detections.
+Once exploration ends, `scan_planner` scores every free cell on the finished
+map by *openness* (the free-space fraction within `SCAN_OPENNESS_RADIUS_M`,
+i.e. clearance and broad sightlines for the tripod) times *centrality*
+(closeness to the mapped structure's centroid, with `SCAN_CENTRALITY_SCALE_M`
+falloff). It picks the best `SCAN_MAX_STATIONS` cells that are at least
+`SCAN_MIN_SEPARATION_M` apart, so the scans cover different parts of the site,
+then drives to each and triggers the X7. No object detection is involved.
 
 While a scan runs the robot must stand still. Because nothing comes back from
 the X7 over ROS, the Windows bridge reports completion on
-`/digital_twin/scan_complete`, and that is what releases the planner. A
-`TRIMBLE_SCAN_TIMEOUT_SEC` safeguard releases it anyway if the report never
-arrives.
+`/digital_twin/scan_complete`, and that is what advances the scan planner to
+the next vantage. A `SCAN_WAIT_TIMEOUT_SEC` safeguard skips a station if the
+report never arrives.
 
 ## Simulation
 
@@ -138,16 +152,15 @@ arrives.
 ```
 
 Both modes run the real production nodes and share one world definition
-(`defect_detection/simulation/world_constants.py`): a concrete wall with three
-defects, two pillars, and a ground plane. The Gazebo world SDF, the synthetic
-scans, and the ground-truth detections are all generated from it, so they
-cannot drift apart.
+(`defect_detection/simulation/world_constants.py`): a concrete wall, two
+pillars, and a ground plane. The Gazebo world SDF and the synthetic cloud are
+generated from it, so they cannot drift apart.
 
-In sim the simulated world cloud feeds the map's long-range cloud source in
-place of a depth camera. The simulated
-X7 still writes a LAS file, and — exactly as in the field — nothing reads it
-back; it only stands in for the scanner's SD card. Sim state lives under
-`/tmp/synthetic_demo` and is wiped on each start.
+In sim the simulated world cloud feeds the map's cloud source in place of a
+depth camera, the robot explores it, and the scan planner then picks vantages
+and scans. The simulated X7 writes a LAS file and — exactly as in the field —
+nothing reads it back; it only stands in for the scanner's SD card. Sim state
+lives under `/tmp/synthetic_demo` and is wiped on each start.
 
 ## Demo Mode
 
@@ -160,22 +173,20 @@ The real robot, the real localization, the real Trimble X7 — an invented site.
 robot's pose when the demo launched, and plays it back as if a sensor were
 sweeping it: range-limited and occluded from the robot's live TF pose, so the
 occupancy map fills in as the robot walks and the frontier planner still has
-somewhere to go. Defects planted in the site are published as 3D detections
-once the robot is close enough and facing them, which sends it to a standoff
-pose and triggers a real X7 scan on arrival.
+somewhere to go. Once exploration ends, the scan planner picks vantages on the
+built map and triggers a real X7 scan at each.
 
 Everything downstream is the field pipeline unmodified — same occupancy map,
-planner, mission manager, goal bridge, scan trigger, and walk home. Only the
-depth camera and YOLO are absent.
+frontier planner, scan planner, mission manager, goal bridge, and walk home.
+Only the depth camera is absent.
 
 The site is a YAML file (`src/defect_detection/config/demo_site.yaml`) whose
 coordinates are metres relative to the robot at launch: `+x` ahead, `+y` left.
 It describes walls, boxes, cylinders, and ground patches that get sampled into
-a cloud, plus the defect list. Point `cloud_path:` at a `.las`/`.laz`/`.pcd`/
-`.ply` instead to demo against a real captured scan, with the defect list
-authored on top of it. Set `DEMO_SITE_PATH` in `config/field.env` to use your
-own; the rest of the `DEMO_*` settings there control sensor range, detection
-range, anchoring, and the excursion leash.
+a cloud. Point `cloud_path:` at a `.las`/`.laz`/`.pcd`/`.ply` instead to demo
+against a real captured scan. Set `DEMO_SITE_PATH` in `config/field.env` to use
+your own; the rest of the `DEMO_*` settings there control sensor range,
+anchoring, the exploration radius, and the excursion leash.
 
 > **Safety.** The occupancy map contains a site that is not there, and nothing
 > in the stack knows about anything that is. Run it in a large open area —
@@ -240,7 +251,7 @@ and a depth camera driver publishing the `/oak/*` topics.
 Windows tablet or laptop
   -> Trimble Perspective controls the X7
   -> bridge app: Start/Stop, scan trigger, scan-finished, E57 upload
-  -> Jetson runs ROS 2, the depth camera, YOLO, planning, and the digital twin
+  -> Jetson runs ROS 2, the depth camera, mapping, planning, and the digital twin
 ```
 
 Install Python 3.12 for Windows, then:
@@ -262,14 +273,12 @@ ingest path.
 ## Requirements
 
 Full setup for both machines — Jetson and the Windows scanner host — is in
-**[docs/INSTALL.md](docs/INSTALL.md)**. Two things bite people there: the
-Jetson needs NVIDIA's PyTorch build rather than the PyPI one, and the TensorRT
-engine must be built on the Jetson itself.
+**[docs/INSTALL.md](docs/INSTALL.md)**.
 
 - ROS 2 Jazzy, Python 3.12
 - OpenCV and `cv_bridge`
-- Ultralytics for YOLO
-- A depth camera driver publishing RGB, aligned depth, and `camera_info`
+- NumPy (the frontier and scan planners are vectorized over the occupancy grid)
+- A depth camera driver publishing a point cloud (and `camera_info`)
 - `bosdyn-client` for Spot state and motion commands
 - `robot_localization` and `pyserial`, only for the optional fused localization
 - `laspy` / `lazrs` only for the legacy LAS ingest path and the simulator

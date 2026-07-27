@@ -36,14 +36,14 @@ source "$WS_ROOT/install/setup.bash"
 
 echo
 echo "Synthetic demo starting. Watch for this sequence:"
-echo "  1. Synthetic camera publishes imagery with 3 defects (crack,"
-echo "     spalling, exposed rebar) on a concrete wall."
-echo "  2. OAK depth fusion turns them into 3D detections (markers in RViz)."
-echo "  3. Scan decision requests a Trimble scan; the synthetic X7 writes a"
-echo "     LAS file; the scan watcher publishes the scan cloud."
-echo "  4. Frame anchor locks the digital twin; the occupancy map appears."
-echo "  5. Planners publish inspection goals; the simulated robot drives"
-echo "     to them; the goal bridge verifies arrival over TF and rescans."
+echo "  1. The synthetic world cloud builds the Oak-D occupancy map."
+echo "  2. The frontier planner publishes exploration goals; the simulated"
+echo "     robot drives to them and maps the bounded radius."
+echo "  3. Exploration ends; the scan planner ranks map vantages by"
+echo "     openness x centrality and drives to the best few."
+echo "  4. The synthetic X7 writes a LAS at each vantage (nothing reads it"
+echo "     back; it stands in for the scanner's SD card)."
+echo "  5. The mission manager walks the robot back to its start pose."
 echo
 
 exec ros2 launch defect_detection synthetic_demo.launch.xml rviz:="$RVIZ"

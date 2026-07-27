@@ -29,7 +29,7 @@ setup(
     zip_safe=True,
     maintainer='avaradar',
     maintainer_email='arunvaradarajan3@gmail.com',
-    description='ROS 2 camera, detection, and point-cloud fusion nodes.',
+    description='ROS 2 depth-camera mapping, frontier exploration, and scan-planning nodes.',
     license='Apache-2.0',
     extras_require={
         'test': [
@@ -39,27 +39,22 @@ setup(
     entry_points={
         'console_scripts': [
             'image_publisher = defect_detection.spot_cam_loading.image_publisher:main',
-            'yolo_detector = defect_detection.defect_detection.yolo_detector:main',
             'visualization_node = '
             'defect_detection.defect_detection.visualization_node:main',
             'trimble_scan_watcher = '
             'defect_detection.digital_twin.trimble_scan_watcher:main',
             'pointcloud_to_occupancy = '
             'defect_detection.digital_twin.pointcloud_to_occupancy:main',
-            'defect_map_node = '
-            'defect_detection.digital_twin.defect_map_node:main',
-            'scan_decision_node = '
-            'defect_detection.digital_twin.scan_decision_node:main',
             'trimble_windows_bridge = '
             'defect_detection.digital_twin.trimble_windows_bridge:main',
             'frame_anchor_node = '
             'defect_detection.digital_twin.frame_anchor_node:main',
             'infrastructure_planner = '
             'defect_detection.digital_twin.infrastructure_planner:main',
+            'scan_planner = '
+            'defect_detection.digital_twin.scan_planner:main',
             'robot_goal_bridge = '
             'defect_detection.digital_twin.robot_goal_bridge:main',
-            'depth_fusion_node = '
-            'defect_detection.digital_twin.depth_fusion_node:main',
             'depth_localization_bridge = '
             'defect_detection.digital_twin.depth_localization_bridge:main',
             'spot_localization_bridge = '
@@ -70,8 +65,6 @@ setup(
             'defect_detection.digital_twin.mission_manager:main',
             'synthetic_field_node = '
             'defect_detection.simulation.synthetic_field_node:main',
-            'sim_detection_node = '
-            'defect_detection.simulation.sim_detection_node:main',
             'sim_scan_node = '
             'defect_detection.simulation.sim_scan_node:main',
             'goal_driver_node = '

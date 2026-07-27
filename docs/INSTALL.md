@@ -5,9 +5,9 @@ what each vendor's software will run on.
 
 | | Jetson (on Spot) | Windows host (tablet or laptop) |
 |---|---|---|
-| Runs | ROS 2, YOLO inference, planning, Spot SDK | Trimble Perspective + the bridge app |
+| Runs | ROS 2, mapping, planning, Spot SDK | Trimble Perspective + the bridge app |
 | Talks to | Spot (pose, motion), the depth camera | The Trimble X7, the Jetson over HTTP/SSH |
-| Why there | CUDA/TensorRT for inference; must ride the robot | **Perspective is Windows-only** — this is the whole reason a second machine exists |
+| Why there | Rides the robot; drives the depth camera and autonomy | **Perspective is Windows-only** — this is the whole reason a second machine exists |
 
 The Windows host does *no* perception and *no* autonomy. It is a scanner
 controller and an operator console. If it goes offline mid-mission the robot
@@ -56,54 +56,23 @@ source /opt/ros/jazzy/setup.bash
 > container with `--runtime nvidia`. Do not try to source-build Jazzy on the
 > Jetson — it is hours of work and breaks on the next JetPack update.
 
-### 1.2 YOLO inference
+### 1.2 Python dependencies
 
-This is the part people get wrong. **Do not `pip install torch`** — PyPI wheels
-are CPU-only x86 builds and will either fail to install or silently run YOLO on
-the CPU at about 2 FPS.
-
-```bash
-# NVIDIA's Jetson-specific PyTorch. Match the URL to your JetPack version:
-#   https://developer.download.nvidia.com/compute/redist/jp/
-sudo apt install -y libopenblas-base libopenmpi-dev
-pip3 install --no-cache-dir \
-  --index-url https://pypi.jetson-ai-lab.dev/jp6/cu126 torch torchvision
-
-# Ultralytics, without letting it pull its own torch
-pip3 install --no-deps ultralytics
-pip3 install opencv-python numpy pyyaml pillow tqdm psutil matplotlib pandas
-```
-
-Verify CUDA is actually live before going further:
+Mapping, exploration, and scan planning are plain NumPy over the occupancy
+grid — there is no GPU inference to set up. Just the ROS Python deps:
 
 ```bash
-python3 -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+pip3 install opencv-python numpy pyyaml
 ```
 
-If that prints `False`, stop and fix it — nothing downstream will perform.
-
-### 1.3 Build the TensorRT engine
-
-`config/field.env` points `MODEL_PATH` at `models/yolov11m.engine`. **That file
-is not in the repo and cannot be** — a TensorRT engine is built for one exact
-GPU, TensorRT version, and JetPack. An engine built anywhere else will not
-load. Build it on the Jetson itself from your trained `.pt`:
-
-```bash
-cd ~/ros2_ws/src/defect_detection/models
-yolo export model=yolov11m.pt format=engine half=True device=0 imgsz=640
-```
-
-Expect 10–20 minutes. Rebuild it after any JetPack or TensorRT upgrade.
-
-### 1.4 Spot SDK and workspace dependencies
+### 1.3 Spot SDK and workspace dependencies
 
 ```bash
 cd ~/ros2_ws
 pip3 install --user -r requirements-field.txt   # bosdyn-client, laspy, lazrs
 ```
 
-### 1.5 Depth camera driver
+### 1.4 Depth camera driver
 
 The workspace does **not** launch your camera — it subscribes to topics. For a
 Luxonis OAK:
@@ -124,7 +93,7 @@ sudo apt install -y ros-jazzy-depth-image-proc
 
 and run `depth_image_proc/point_cloud_xyz` to produce `MAP_DEPTH_POINTS_TOPIC`.
 
-### 1.5b Fused localization (optional)
+### 1.4b Fused localization (optional)
 
 Spot's vision frame already walks the robot home, so this is optional. To
 fuse Spot's pose, a navX IMU, and the depth camera's visual odometry through
@@ -141,7 +110,7 @@ the EKF inputs in `src/defect_detection/config/ekf.yaml` and
 `launch/fused_localization.launch.xml`, and verify the TF tree
 (`ros2 run tf2_tools view_frames`) before trusting it in the field.
 
-### 1.6 Build and configure
+### 1.5 Build and configure
 
 ```bash
 cd ~/ros2_ws
@@ -159,14 +128,14 @@ Confirm the topic names rather than trusting the defaults:
 ros2 topic list | grep -E "rgb|depth|points"
 ```
 
-### 1.7 Verify
+### 1.6 Verify
 
 ```bash
 ./scripts/field_preflight.sh mission
 ```
 
-It checks the Spot SDK import, reachability of `SPOT_IP`, and the
-model/dataset files. Then dry-run the whole loop with no hardware at all:
+It checks the Spot SDK import and reachability of `SPOT_IP`. Then dry-run the
+whole loop with no hardware at all:
 
 ```bash
 ./scripts/run_field.sh mission --sim synthetic

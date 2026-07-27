@@ -9,23 +9,8 @@
   <arg name="camera_frame_rate" default="30.0"
        description="Requested camera publication rate."/>
   <arg name="camera_reconnect_interval_sec" default="2.0"/>
-  <arg name="detector" default="false"
-       description="Run YOLO. Requires ultralytics and models/yolov11m.engine."/>
-  <arg name="dataset_path"
-       default="$(find-pkg-share defect_detection)/models/dataset.yaml"/>
-  <arg name="model_path"
-       default="$(find-pkg-share defect_detection)/models/yolov11m.engine"/>
   <arg name="image_topic" default="/ros2_image"/>
-  <arg name="detections_2d_topic" default="/detections_2d"/>
   <arg name="pointcloud_topic" default="/cloud/points"/>
-  <arg name="detections_3d_topic" default="/detections_3d"/>
-  <arg name="depth_navigation" default="false"
-       description="Use the depth camera to turn 2D detections into navigation-ready 3D detections."/>
-  <arg name="depth_topic" default="/oak/rgb/depth"/>
-  <arg name="depth_camera_info_topic" default="/oak/rgb/camera_info"/>
-  <arg name="depth_minimum_confidence" default="0.50"/>
-  <arg name="depth_bbox_padding_px" default="4"/>
-  <arg name="depth_default_bbox_size_m" default="0.20"/>
   <arg name="depth_localization" default="false"
        description="Use depth-camera visual odometry/VSLAM as the localization source. Off by default: Spot's own vision frame is the mission frame."/>
   <arg name="depth_odom_topic" default="/oak/odom"/>
@@ -33,7 +18,7 @@
   <arg name="depth_odom_base_frame" default="body"/>
   <arg name="depth_odom_use_message_frame_ids" default="true"/>
   <arg name="visualization" default="true"
-       description="Republish the cloud and convert 3D detections to RViz markers."/>
+       description="Republish the cloud for the RViz displays."/>
   <arg name="rviz" default="false"
        description="Open RViz with the point-cloud and marker displays configured."/>
   <arg name="visualization_pointcloud_topic" default="/rviz/pointcloud"/>
@@ -43,11 +28,6 @@
   <arg name="marker_lifetime_sec" default="0.50"/>
   <arg name="navigation_target_frame" default="map"/>
   <arg name="navigation_base_frame" default="base_link"/>
-  <arg name="navigation_standoff_distance" default="1.50"/>
-  <arg name="sync_queue_size" default="30"
-       description="Number of detection and cloud messages retained for matching."/>
-  <arg name="sync_slop_sec" default="0.10"
-       description="Maximum camera/point-cloud acquisition-time difference."/>
   <arg name="trimble_scan_watcher" default="false"
        description="Watch a folder for completed Trimble X7 LAS/LAZ scans."/>
   <arg name="trimble_scan_directory" default="/tmp/trimble_scans"/>
@@ -55,21 +35,10 @@
   <arg name="trimble_scan_frame" default="map"/>
   <arg name="trimble_scan_max_points" default="500000"/>
   <arg name="trimble_require_scan_request" default="true"/>
-  <arg name="scan_decision" default="false"
-       description="Request X7 scans only for high-confidence detections."/>
-  <arg name="scan_mode" default="coverage"
-       description="X7 trigger: 'coverage' scans at every waypoint the planner stopped at; 'detection' additionally requires live high-confidence YOLO detections."/>
-  <arg name="scan_request_initial" default="true"
-       description="Request a reference scan on startup."/>
   <arg name="scan_complete_topic" default="/digital_twin/scan_complete"
        description="Reported by the Windows bridge; the X7 keeps its scans on its own SD card, so nothing returns over ROS."/>
   <arg name="scan_required_topic" default="/digital_twin/scan_required"/>
   <arg name="scan_reason_topic" default="/digital_twin/scan_reason"/>
-  <arg name="scan_confidence_threshold" default="0.65"/>
-  <arg name="scan_min_detections" default="1"/>
-  <arg name="scan_cooldown_sec" default="60.0"/>
-  <arg name="min_scan_separation_m" default="10.0"
-       description="Skip scans closer than this to a previous scan location."/>
   <arg name="digital_twin_map" default="false"
        description="Build a 2D occupancy map from the depth camera (and, in sim/demo, a long-range cloud source)."/>
   <arg name="digital_twin_map_topic" default="/digital_twin/map"/>
@@ -90,7 +59,8 @@
   <arg name="map_cloud_max_points_per_update" default="40000"/>
   <arg name="map_cloud_sensor_frame" default=""/>
   <arg name="map_cloud_update_period_sec" default="0.5"/>
-  <!-- Depth camera: short range and dense, the field map's backbone. -->
+  <!-- Depth camera (Oak-D Pro): short range and dense, the field map's
+       backbone and the only sensor that builds the field map. -->
   <arg name="map_depth_enabled" default="true"/>
   <arg name="map_depth_points_topic" default="/depth/points"/>
   <arg name="map_depth_min_z" default="-0.25"/>
@@ -106,17 +76,42 @@
   <arg name="anchor_request_topic" default="/digital_twin/anchor_request"/>
   <arg name="anchor_store_path" default="/tmp/digital_twin_anchor.yaml"/>
   <arg name="auto_anchor_on_first_scan" default="true"/>
+
+  <!-- Frontier explorer: drives the robot to map the site with the Oak-D
+       occupancy grid. Time-efficient cost/utility frontier selection,
+       bounded to a radius around the mission start. No object detection is
+       involved; goals come only from the shape of the map. -->
   <arg name="infrastructure_planner" default="true"
-       description="Plan generic inspection/rescan station goals."/>
+       description="Plan frontier exploration goals from the occupancy map."/>
   <arg name="infrastructure_goal_topic"
        default="/infrastructure/inspection_goal"/>
   <arg name="infrastructure_goal_cooldown_sec" default="20.0"/>
-  <arg name="prefer_defect_rescans" default="true"
-       description="Visit defect rescan goals before map frontiers."/>
-  <arg name="planner_hold_for_scan" default="true"
-       description="Stand still between a scan request and the scanner reporting it finished."/>
-  <arg name="planner_scan_wait_timeout_sec" default="300.0"/>
+  <arg name="planner_status_topic" default="/infrastructure/planner_status"/>
+  <arg name="exploration_radius_m" default="40.0"
+       description="Cap exploration to this radius around the mission start pose."/>
+  <arg name="planner_min_frontier_distance_m" default="1.0"/>
+  <arg name="planner_travel_decay_m" default="8.0"
+       description="Cost/utility decay: smaller keeps the robot greedy and nearby (faster); larger tolerates longer drives for bigger frontiers."/>
+  <arg name="planner_min_frontier_cluster_cells" default="4"/>
   <arg name="allow_exploration_topic" default="/mission/allow_exploration"/>
+
+  <!-- Scan planner: after exploration, ranks free cells on the finished
+       map by openness * centrality and takes the X7 scans at the best few
+       well-separated vantages. Map-only; no object detection. -->
+  <arg name="scan_planner" default="true"
+       description="Pick the best scan vantages from the map and trigger the X7 there."/>
+  <arg name="start_scanning_topic" default="/mission/start_scanning"/>
+  <arg name="scanning_complete_topic" default="/mission/scanning_complete"/>
+  <arg name="scan_max_stations" default="3"/>
+  <arg name="scan_min_separation_m" default="8.0"
+       description="Minimum spacing between chosen scan vantages."/>
+  <arg name="scan_openness_radius_m" default="3.0"/>
+  <arg name="scan_min_openness" default="0.6"/>
+  <arg name="scan_centrality_scale_m" default="10.0"/>
+  <arg name="scan_leg_timeout_sec" default="90.0"/>
+  <arg name="scan_wait_timeout_sec" default="300.0"/>
+  <arg name="scan_settle_sec" default="2.0"/>
+
   <arg name="spot_localization" default="false"
        description="Publish Spot's world pose as the mission TF via the Boston Dynamics SDK."/>
   <arg name="spot_frame" default="vision"
@@ -153,7 +148,7 @@
   <arg name="navx_roll" default="0.0"/>
   <arg name="navx_pitch" default="0.0"/>
   <arg name="navx_yaw" default="0.0"/>
-  <!-- Mission lifecycle: explore, walk home, wait for the E57 upload. -->
+  <!-- Mission lifecycle: explore, scan, walk home, wait for the E57 upload. -->
   <arg name="mission_manager" default="false"
        description="Own the mission lifecycle and return the robot to its start pose."/>
   <arg name="mission_state_topic" default="/mission/state"/>
@@ -161,12 +156,15 @@
   <arg name="mission_upload_complete_topic" default="/mission/upload_complete"/>
   <arg name="mission_summary_path" default="/tmp/mission_summary.yaml"/>
   <arg name="mission_max_stations" default="0"/>
-  <arg name="mission_max_excursion_m" default="30.0"/>
+  <arg name="mission_max_excursion_m" default="40.0"/>
   <arg name="mission_duration_sec" default="0.0"/>
   <arg name="mission_no_frontier_patience_sec" default="60.0"/>
   <arg name="mission_breadcrumb_min_spacing_m" default="2.0"/>
   <arg name="mission_return_leg_timeout_sec" default="90.0"/>
   <arg name="mission_home_position_tolerance_m" default="1.0"/>
+  <arg name="mission_scan_phase_enabled" default="true"
+       description="Hand off to the scan planner when exploration ends, before walking home."/>
+  <arg name="mission_scanning_timeout_sec" default="600.0"/>
   <arg name="robot_goal_bridge" default="false"
        description="Send inspection goals to a robot backend."/>
   <arg name="robot_goal_backend" default="dry_run"/>
@@ -193,15 +191,6 @@
   <arg name="trimble_camera_preview_width" default="640"/>
   <arg name="trimble_scan_timeout_sec" default="300.0"
        description="Release the robot if the Windows bridge never reports the scan finished."/>
-  <arg name="defect_map" default="false"
-       description="Persist AI defect markers for the digital twin."/>
-  <arg name="defect_map_store_path"
-       default="/tmp/digital_twin_defects.yaml"/>
-  <arg name="defect_map_markers_topic"
-       default="/digital_twin/defect_markers"/>
-  <arg name="defect_map_minimum_confidence" default="0.50"/>
-  <arg name="defect_rescan_goals_topic"
-       default="/digital_twin/rescan_goals"/>
 
   <node if="$(var publish_camera)"
         pkg="defect_detection"
@@ -213,35 +202,6 @@
     <param name="frame_rate" value="$(var camera_frame_rate)"/>
     <param name="reconnect_interval_sec"
            value="$(var camera_reconnect_interval_sec)"/>
-  </node>
-
-  <node if="$(var detector)"
-        pkg="defect_detection"
-        exec="yolo_detector"
-        name="yolo_node"
-        output="screen">
-    <param name="dataset_path" value="$(var dataset_path)"/>
-    <param name="model_path" value="$(var model_path)"/>
-    <param name="image_topic" value="$(var image_topic)"/>
-    <param name="detections_topic" value="$(var detections_2d_topic)"/>
-  </node>
-
-  <node if="$(var depth_navigation)"
-        pkg="defect_detection"
-        exec="depth_fusion_node"
-        name="depth_detection_fusion"
-        output="screen">
-    <param name="detections_2d_topic" value="$(var detections_2d_topic)"/>
-    <param name="depth_topic" value="$(var depth_topic)"/>
-    <param name="camera_info_topic" value="$(var depth_camera_info_topic)"/>
-    <param name="detections_3d_topic" value="$(var detections_3d_topic)"/>
-    <param name="minimum_confidence"
-           value="$(var depth_minimum_confidence)"/>
-    <param name="bbox_padding_px" value="$(var depth_bbox_padding_px)"/>
-    <param name="default_bbox_size_m"
-           value="$(var depth_default_bbox_size_m)"/>
-    <param name="sync_queue_size" value="$(var sync_queue_size)"/>
-    <param name="sync_slop_sec" value="$(var sync_slop_sec)"/>
   </node>
 
   <node if="$(var depth_localization)"
@@ -264,7 +224,6 @@
     <param name="visualization_pointcloud_topic"
            value="$(var visualization_pointcloud_topic)"/>
     <param name="pointcloud_topic" value="$(var pointcloud_topic)"/>
-    <param name="detections_topic" value="$(var detections_3d_topic)"/>
     <param name="markers_topic" value="$(var markers_topic)"/>
     <param name="box_alpha" value="$(var box_alpha)"/>
     <param name="label_height" value="$(var label_height)"/>
@@ -290,26 +249,6 @@
     <param name="require_scan_request"
            value="$(var trimble_require_scan_request)"/>
     <param name="scan_required_topic" value="$(var scan_required_topic)"/>
-  </node>
-
-  <node if="$(var scan_decision)"
-        pkg="defect_detection"
-        exec="scan_decision_node"
-        name="digital_twin_scan_decision"
-        output="screen">
-    <param name="mode" value="$(var scan_mode)"/>
-    <param name="waypoint_arrived_topic" value="$(var waypoint_arrived_topic)"/>
-    <param name="request_initial_scan" value="$(var scan_request_initial)"/>
-    <param name="detections_topic" value="$(var detections_2d_topic)"/>
-    <param name="scan_required_topic" value="$(var scan_required_topic)"/>
-    <param name="scan_reason_topic" value="$(var scan_reason_topic)"/>
-    <param name="confidence_threshold"
-           value="$(var scan_confidence_threshold)"/>
-    <param name="min_detections" value="$(var scan_min_detections)"/>
-    <param name="scan_cooldown_sec" value="$(var scan_cooldown_sec)"/>
-    <param name="min_scan_separation_m" value="$(var min_scan_separation_m)"/>
-    <param name="target_frame" value="$(var navigation_target_frame)"/>
-    <param name="base_frame" value="$(var navigation_base_frame)"/>
   </node>
 
   <node if="$(var digital_twin_map)"
@@ -396,12 +335,19 @@
     <param name="goal_topic" value="$(var infrastructure_goal_topic)"/>
     <param name="waypoint_arrived_topic"
            value="$(var waypoint_arrived_topic)"/>
+    <param name="planner_status_topic" value="$(var planner_status_topic)"/>
     <param name="allow_exploration_topic"
            value="$(var allow_exploration_topic)"/>
     <param name="state_topic" value="$(var mission_state_topic)"/>
     <param name="return_home_topic" value="$(var mission_return_home_topic)"/>
     <param name="upload_complete_topic"
            value="$(var mission_upload_complete_topic)"/>
+    <param name="scan_phase_enabled" value="$(var mission_scan_phase_enabled)"/>
+    <param name="start_scanning_topic" value="$(var start_scanning_topic)"/>
+    <param name="scanning_complete_topic"
+           value="$(var scanning_complete_topic)"/>
+    <param name="scanning_timeout_sec"
+           value="$(var mission_scanning_timeout_sec)"/>
     <param name="summary_path" value="$(var mission_summary_path)"/>
     <param name="max_stations" value="$(var mission_max_stations)"/>
     <param name="max_excursion_m" value="$(var mission_max_excursion_m)"/>
@@ -438,25 +384,48 @@
         output="screen">
     <param name="enabled" value="true"/>
     <param name="map_topic" value="$(var digital_twin_map_topic)"/>
-    <param name="rescan_goals_topic" value="$(var defect_rescan_goals_topic)"/>
     <param name="goal_topic" value="$(var infrastructure_goal_topic)"/>
+    <param name="status_topic" value="$(var planner_status_topic)"/>
     <param name="target_frame" value="$(var navigation_target_frame)"/>
     <param name="base_frame" value="$(var navigation_base_frame)"/>
-    <param name="standoff_distance_m"
-           value="$(var navigation_standoff_distance)"/>
     <param name="goal_cooldown_sec"
            value="$(var infrastructure_goal_cooldown_sec)"/>
-    <param name="prefer_defect_rescans"
-           value="$(var prefer_defect_rescans)"/>
-    <param name="hold_for_scan" value="$(var planner_hold_for_scan)"/>
-    <param name="scan_required_topic" value="$(var scan_required_topic)"/>
-    <param name="scan_complete_topic" value="$(var scan_complete_topic)"/>
-    <param name="waypoint_arrived_topic"
-           value="$(var waypoint_arrived_topic)"/>
+    <param name="exploration_radius_m" value="$(var exploration_radius_m)"/>
+    <param name="min_frontier_distance_m"
+           value="$(var planner_min_frontier_distance_m)"/>
+    <param name="travel_decay_m" value="$(var planner_travel_decay_m)"/>
+    <param name="min_frontier_cluster_cells"
+           value="$(var planner_min_frontier_cluster_cells)"/>
     <param name="allow_exploration_topic"
            value="$(var allow_exploration_topic)"/>
-    <param name="scan_wait_timeout_sec"
-           value="$(var planner_scan_wait_timeout_sec)"/>
+  </node>
+
+  <node if="$(var scan_planner)"
+        pkg="defect_detection"
+        exec="scan_planner"
+        name="scan_planner"
+        output="screen">
+    <param name="map_topic" value="$(var digital_twin_map_topic)"/>
+    <param name="goal_topic" value="$(var infrastructure_goal_topic)"/>
+    <param name="status_topic" value="$(var planner_status_topic)"/>
+    <param name="target_frame" value="$(var navigation_target_frame)"/>
+    <param name="base_frame" value="$(var navigation_base_frame)"/>
+    <param name="start_scanning_topic" value="$(var start_scanning_topic)"/>
+    <param name="scanning_complete_topic"
+           value="$(var scanning_complete_topic)"/>
+    <param name="waypoint_arrived_topic"
+           value="$(var waypoint_arrived_topic)"/>
+    <param name="scan_required_topic" value="$(var scan_required_topic)"/>
+    <param name="scan_reason_topic" value="$(var scan_reason_topic)"/>
+    <param name="scan_complete_topic" value="$(var scan_complete_topic)"/>
+    <param name="max_scan_stations" value="$(var scan_max_stations)"/>
+    <param name="min_scan_separation_m" value="$(var scan_min_separation_m)"/>
+    <param name="openness_radius_m" value="$(var scan_openness_radius_m)"/>
+    <param name="min_openness" value="$(var scan_min_openness)"/>
+    <param name="centrality_scale_m" value="$(var scan_centrality_scale_m)"/>
+    <param name="leg_timeout_sec" value="$(var scan_leg_timeout_sec)"/>
+    <param name="scan_timeout_sec" value="$(var scan_wait_timeout_sec)"/>
+    <param name="scan_settle_sec" value="$(var scan_settle_sec)"/>
   </node>
 
   <node if="$(var spot_localization)"
@@ -517,7 +486,6 @@
     <param name="navigation_status_topic"
            value="/infrastructure/navigation_status"/>
     <param name="image_topic" value="$(var image_topic)"/>
-    <param name="detections_topic" value="$(var detections_2d_topic)"/>
     <param name="camera_preview_enabled"
            value="$(var trimble_camera_preview)"/>
     <param name="camera_preview_rate_hz"
@@ -530,19 +498,5 @@
     <param name="upload_complete_topic"
            value="$(var mission_upload_complete_topic)"/>
     <param name="scan_timeout_sec" value="$(var trimble_scan_timeout_sec)"/>
-  </node>
-
-  <node if="$(var defect_map)"
-        pkg="defect_detection"
-        exec="defect_map_node"
-        name="digital_twin_defect_map"
-        output="screen">
-    <param name="detections_topic" value="$(var detections_3d_topic)"/>
-    <param name="markers_topic" value="$(var defect_map_markers_topic)"/>
-    <param name="rescan_goals_topic" value="$(var defect_rescan_goals_topic)"/>
-    <param name="target_frame" value="$(var navigation_target_frame)"/>
-    <param name="store_path" value="$(var defect_map_store_path)"/>
-    <param name="minimum_confidence"
-           value="$(var defect_map_minimum_confidence)"/>
   </node>
 </launch>

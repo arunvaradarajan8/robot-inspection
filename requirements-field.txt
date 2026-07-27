@@ -1,4 +1,3 @@
-ultralytics>=8.4,<9
 laspy>=2.5,<3
 lazrs>=0.6,<1
 bosdyn-client

@@ -75,8 +75,9 @@
   <arg name="mission_max_excursion_m" default="20.0"
        description="Hard leash on how far the robot may walk from its
                     start pose. Keep it inside the clear area."/>
-  <arg name="min_scan_separation_m" default="4.0"/>
-  <arg name="scan_cooldown_sec" default="45.0"/>
+  <arg name="exploration_radius_m" default="20.0"
+       description="Bound frontier exploration to this radius around start."/>
+  <arg name="scan_min_separation_m" default="4.0"/>
   <arg name="rviz" default="true"/>
 
   <!-- The stack navigates in 'map'; Spot localizes in its own world
@@ -110,10 +111,8 @@
 
   <include file="$(find-pkg-share defect_detection)/launch/defect_detection.launch.xml">
     <!-- No site sensors at all: the virtual site replaces every one of
-         them. YOLO and the depth fusion have no images to work on. -->
+         them and feeds the map through the long-range cloud source. -->
     <arg name="publish_camera" value="false"/>
-    <arg name="detector" value="false"/>
-    <arg name="depth_navigation" value="false"/>
     <arg name="depth_localization" value="false"/>
     <arg name="map_depth_enabled" value="false"/>
 
@@ -146,19 +145,15 @@
          frames to forward to the Windows app. -->
     <arg name="trimble_camera_preview" value="false"/>
 
-    <!-- Mission logic under test, unchanged from the field. -->
-    <arg name="scan_decision" value="true"/>
-    <arg name="scan_mode" value="coverage"/>
-    <arg name="scan_cooldown_sec" value="$(var scan_cooldown_sec)"/>
-    <arg name="min_scan_separation_m" value="$(var min_scan_separation_m)"/>
+    <!-- Mission logic under test, unchanged from the field: frontier
+         exploration, then map-vantage scanning, then walk home. -->
     <arg name="infrastructure_planner" value="true"/>
-    <arg name="prefer_defect_rescans" value="true"/>
-    <arg name="planner_hold_for_scan" value="true"/>
+    <arg name="exploration_radius_m" value="$(var exploration_radius_m)"/>
+    <arg name="scan_planner" value="true"/>
+    <arg name="scan_min_separation_m" value="$(var scan_min_separation_m)"/>
     <arg name="mission_manager" value="true"/>
     <arg name="mission_max_excursion_m" value="$(var mission_max_excursion_m)"/>
     <arg name="mission_summary_path" value="$(var demo_root)/mission.yaml"/>
-    <arg name="defect_map" value="true"/>
-    <arg name="defect_map_store_path" value="$(var demo_root)/defects.yaml"/>
     <arg name="frame_anchor" value="false"/>
 
     <arg name="visualization" value="true"/>
