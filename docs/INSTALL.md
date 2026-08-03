@@ -203,19 +203,28 @@ camera driver only gives a depth image, also install this and run its
 sudo apt install -y ros-jazzy-depth-image-proc
 ```
 
+> **Localization is the camera, not Spot.** The mission gets the robot's
+> position entirely from the depth camera's **visual‑inertial odometry**
+> (topic `/oak/odom`) — Spot's leg/joint‑encoder odometry is **not** used at
+> all. So your camera launch must also **publish odometry**: enable the OAK's
+> on‑device VIO, or run a VIO / RTAB‑Map node that outputs `/oak/odom`. Check
+> it's alive with `ros2 topic hz /oak/odom` before a mission. (If it isn't
+> publishing, the robot won't be localized and the map won't build.)
+
 ### 1.6 (Optional) Fused localization
 
-Skip this the first time. Spot's own position tracking is good enough to walk
-the robot home. Later, for a steadier position estimate, you can blend Spot's
-pose + an IMU + the camera:
+**Skip this** — leave it off. Localization comes from the depth camera alone
+(step 1.5). This optional EKF would fuse Spot's kinematic pose + an IMU back
+into the estimate, which reintroduces Spot's joint‑encoder odometry — the
+opposite of the camera‑only setup. Only enable it if you deliberately decide
+you want Spot's pose in the mix again:
 
 ```bash
 sudo apt install -y ros-jazzy-robot-localization   # only if FUSED_LOCALIZATION=true
 ```
 
 Details (the `ekf.yaml` inputs, the navX IMU bridge) are in
-`launch/fused_localization.launch.xml`. Leave it off (`FUSED_LOCALIZATION=false`)
-until everything else works.
+`launch/fused_localization.launch.xml`. Keep `FUSED_LOCALIZATION=false`.
 
 ### 1.7 Build the software
 
@@ -465,8 +474,10 @@ the Beryl Wi‑Fi with the right IPs.
 map. Check the point‑cloud topic exists (`ros2 topic hz /depth/points`) and that
 your `MAP_DEPTH_POINTS_TOPIC` in `field.env` matches `ros2 topic list`.
 
-**Robot returns but misses its start spot** — you're probably using `odom`
-(which drifts). Set `SPOT_FRAME=vision` in `config/field.env`.
+**Robot returns but misses its start spot** — the camera's visual‑inertial
+odometry has drifted. Check `/oak/odom` is healthy (`ros2 topic hz /oak/odom`)
+and that the camera has enough texture/light for VIO; poor VIO is the usual
+cause. (Localization is camera‑only by design — Spot's odometry is not used.)
 
 **Spot doesn't answer** — wrong `SPOT_IP`, or it's not on the network yet. Run
 `./scripts/field_preflight.sh mission` and `ping <SPOT_IP>`.

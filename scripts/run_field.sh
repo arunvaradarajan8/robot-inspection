@@ -205,13 +205,17 @@ map_depth_enabled="${MAP_DEPTH_ENABLED:-false}"
 robot_world_frame="${ROBOT_WORLD_FRAME:-vision}"
 fused_localization="${FUSED_LOCALIZATION:-false}"
 if [[ "${MODE}" == "mission" ]]; then
-  # The field pipeline. Spot's vision frame localizes the mission, the
-  # Oak-D depth camera builds the occupancy map, the planner explores
-  # frontiers to map a bounded radius, the scan planner then picks the best
-  # vantages and triggers the X7, and the mission manager walks the robot
-  # home. No object detection is involved in where the robot goes.
-  depth_localization=false
-  spot_localization="${SPOT_LOCALIZATION:-true}"
+  # The field pipeline. The Oak-D depth camera is the ONLY localization
+  # source -- its visual-inertial odometry on /oak/odom drives the world->
+  # base TF -- and it also builds the occupancy map. Spot's leg/joint-encoder
+  # (kinematic) odometry is deliberately NOT used for localization at all.
+  # The planner explores frontiers to map a bounded radius, the scan planner
+  # picks the best vantages and triggers the X7, and the mission manager
+  # walks the robot home. No object detection is involved in where the robot
+  # goes.
+  depth_localization="${DEPTH_LOCALIZATION:-true}"
+  spot_localization="${SPOT_LOCALIZATION:-false}"
+  robot_world_frame="${ROBOT_WORLD_FRAME:-depth_odom}"
   mission_manager="${MISSION_MANAGER:-true}"
   map_depth_enabled="${MAP_DEPTH_ENABLED:-true}"
 fi
@@ -263,6 +267,7 @@ exec ros2 launch pointcloud_bridge full_pipeline.launch.xml \
   map_depth_sensor_frame:="${MAP_DEPTH_SENSOR_FRAME:-}" \
   frame_anchor:="${FRAME_ANCHOR:-false}" \
   robot_world_frame:="${robot_world_frame}" \
+  navigation_target_frame:="${NAVIGATION_TARGET_FRAME:-${robot_world_frame}}" \
   anchor_store_path:="${ANCHOR_STORE_PATH:-/tmp/digital_twin_anchor.yaml}" \
   auto_anchor_on_first_scan:="${AUTO_ANCHOR_ON_FIRST_SCAN:-true}" \
   infrastructure_planner:="${INFRASTRUCTURE_PLANNER:-true}" \

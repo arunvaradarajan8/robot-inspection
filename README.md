@@ -70,24 +70,29 @@ stack proposes goals without moving hardware.
 
 ## Hardware
 
-**Spot.** The robot's world pose comes over the Boston Dynamics SDK via
-`spot_localization_bridge`, and SE2 walk commands go back the same way. Spot's
-own onboard obstacle avoidance runs underneath every command.
+**Spot.** Spot is used for **motion only** — SE2 walk commands go over the
+Boston Dynamics SDK, and Spot's own onboard obstacle avoidance runs underneath
+every command. Spot's **leg/joint-encoder (kinematic) odometry is deliberately
+not used for localization at all** (`SPOT_LOCALIZATION=false`); the
+`spot_localization_bridge` that would read it stays off.
 
-The mission runs in Spot's **vision** frame rather than `odom`. Vision is
-drift-corrected against Spot's own cameras, and the accuracy of the walk home
-after a long excursion follows directly from that choice. Set
-`SPOT_FRAME=odom` for the smoother but drifting alternative.
+**Localization is the depth camera.** The robot's world pose comes entirely
+from the Oak-D's **visual-inertial odometry** on `/oak/odom`, republished as
+the `depth_odom -> body` TF by `depth_localization_bridge`
+(`DEPTH_LOCALIZATION=true`, `ROBOT_WORLD_FRAME=depth_odom`). The occupancy map,
+the planner, the scan planner, and the walk-home all live in that camera frame.
+Your OAK launch must publish odometry on `/oak/odom` (on-device VIO or an
+RTAB-Map/VIO node) or the robot will not be localized.
 
-**Localization (optional fusion).** Spot's vision frame alone already walks
-the robot home. For a steadier estimate you can fuse Spot's pose, a **navX
-IMU**, and the depth camera's **visual odometry** through a `robot_localization`
-EKF (`FUSED_LOCALIZATION=true`). When on, `spot_localization_bridge` streams
-odometry only and the EKF owns the `vision -> body` transform; the navX bridge
-(`navx_imu_bridge`) publishes `sensor_msgs/Imu` either by relaying an existing
-Imu topic or by reading a navX over USB/UART. See the EKF inputs in
-`config/ekf.yaml` and `launch/fused_localization.launch.xml`, and verify the
-TF tree on the Jetson before relying on it.
+> The optional `robot_localization` EKF (`FUSED_LOCALIZATION=true`, with a
+> **navX IMU** via `navx_imu_bridge` and `config/ekf.yaml`) is **off** and
+> would fuse Spot's kinematic pose back in — enable it only if you deliberately
+> want Spot's odometry in the estimate again.
+
+> **Autonomous motion caveat:** goals are computed in `depth_odom`, but Spot
+> only accepts move commands in its own frame, and with Spot localization off
+> there is no TF linking the two. So `ROBOT_GOAL_BRIDGE=true`/`spot_sdk` needs
+> that link added first; run supervised (walk Spot by tablet) until then.
 
 **Depth camera (Oak-D Pro).** The only sensor that builds the map. Any depth
 camera works; the defaults match a Luxonis OAK running `depthai_ros`. It
