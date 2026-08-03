@@ -28,6 +28,20 @@ def post_json(url, payload, timeout_sec):
         return response.status, response.read().decode('utf-8')
 
 
+def compose_body_goal_in_spot_frame(spot_x, spot_y, spot_yaw, dx, dy, dyaw):
+    """Re-express a body-relative goal in Spot's command frame.
+
+    (spot_x, spot_y, spot_yaw) is where Spot's own snapshot says the body is
+    in its command frame; (dx, dy, dyaw) is the goal relative to the body as
+    computed from the camera localization. Composing the two yields the SE2
+    goal Spot's firmware will accept, without ever feeding Spot's pose back
+    into our localization or the map.
+    """
+    goal_x = spot_x + math.cos(spot_yaw) * dx - math.sin(spot_yaw) * dy
+    goal_y = spot_y + math.sin(spot_yaw) * dx + math.cos(spot_yaw) * dy
+    return goal_x, goal_y, normalize_angle(spot_yaw + dyaw)
+
+
 class RobotGoalBridge(Node):
 
     def __init__(self):
@@ -149,6 +163,7 @@ class RobotGoalBridge(Node):
         self.dry_run_timer = None
         self.spot = None
         self.spot_command_client = None
+        self.spot_state_client = None
         self.spot_lease_keepalive = None
 
         self.get_logger().info(
@@ -243,39 +258,122 @@ class RobotGoalBridge(Node):
 
     def send_spot_sdk_goal(self, goal):
         try:
-            spot_goal = self.transform_goal_for_spot(goal)
-            command_id = self.command_spot_to_goal(spot_goal)
+            self.ensure_spot_connected()
+            goal_x, goal_y, goal_heading = self.spot_goal_coordinates(goal)
+            command_id = self.command_spot_to_goal(goal_x, goal_y, goal_heading)
             self.wait_for_spot_goal(command_id)
         except Exception as error:
             self.finish_goal(f'spot sdk command failed: {error}', arrived=False)
 
-    def transform_goal_for_spot(self, goal):
+    def spot_goal_coordinates(self, goal):
+        """Express the goal as (x, y, heading) in Spot's command frame.
+
+        With camera-only localization there is no TF linking the camera's
+        world frame (depth_odom) to Spot's own frames, so the goal cannot be
+        transformed directly. Instead the goal is made body-relative with
+        the camera TF -- where the camera says the robot is -- and Spot's
+        transform snapshot, read once at command time, re-expresses that
+        displacement in Spot's command frame. Spot's pose is never fed back
+        into localization or the map; it is only the dialect the motion
+        command must be spoken in.
+
+        If a direct TF to the command frame does exist (Spot localization
+        turned back on), it is preferred, matching the old behaviour.
+        """
         if goal.header.frame_id == self.spot_command_frame:
-            return goal
-        try:
+            return (
+                goal.pose.position.x,
+                goal.pose.position.y,
+                yaw_from_quaternion(goal.pose.orientation),
+            )
+
+        if self.tf_buffer.can_transform(
+            self.spot_command_frame,
+            goal.header.frame_id,
+            rclpy.time.Time(),
+            timeout=Duration(seconds=0.25),
+        ):
             transform = self.tf_buffer.lookup_transform(
                 self.spot_command_frame,
                 goal.header.frame_id,
                 rclpy.time.Time(),
                 timeout=Duration(seconds=1.0),
             )
-            transformed_pose = do_transform_pose(goal.pose, transform)
+            pose = do_transform_pose(goal.pose, transform)
+            self.publish_status(
+                f'goal transformed by TF into {self.spot_command_frame}'
+            )
+            return (
+                pose.position.x,
+                pose.position.y,
+                yaw_from_quaternion(pose.orientation),
+            )
+
+        dx, dy, dyaw = self.body_relative_goal(goal)
+        spot_x, spot_y, spot_yaw = self.spot_body_se2()
+        self.publish_status(
+            'camera-only goal: body-relative '
+            f'dx={dx:.2f}, dy={dy:.2f}, dyaw={dyaw:.2f} composed with '
+            f"Spot's snapshot pose in {self.spot_command_frame}"
+        )
+        return compose_body_goal_in_spot_frame(
+            spot_x, spot_y, spot_yaw, dx, dy, dyaw,
+        )
+
+    def body_relative_goal(self, goal):
+        """Goal relative to the robot body, from the camera localization."""
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.arrival_base_frame,
+                goal.header.frame_id,
+                rclpy.time.Time(),
+                timeout=Duration(seconds=1.0),
+            )
         except TransformException as error:
             raise RuntimeError(
-                f'cannot transform {goal.header.frame_id} goal to '
-                f'{self.spot_command_frame}: {error}'
+                f'cannot express {goal.header.frame_id} goal relative to '
+                f'{self.arrival_base_frame}: camera localization TF is '
+                f'missing ({error})'
             ) from error
+        pose = do_transform_pose(goal.pose, transform)
+        return (
+            pose.position.x,
+            pose.position.y,
+            yaw_from_quaternion(pose.orientation),
+        )
 
-        spot_goal = PoseStamped()
-        spot_goal.header.frame_id = self.spot_command_frame
-        spot_goal.header.stamp = self.get_clock().now().to_msg()
-        spot_goal.pose = transformed_pose
-        return spot_goal
+    def spot_body_se2(self):
+        """Spot's body pose in its command frame, from its own snapshot.
 
-    def command_spot_to_goal(self, goal):
-        self.ensure_spot_connected()
-        yaw = yaw_from_quaternion(goal.pose.orientation)
+        Read once per command to translate a body-relative goal into Spot's
+        dialect. This never enters the map or the pose estimate.
+        """
+        from bosdyn.client.frame_helpers import (
+            BODY_FRAME_NAME,
+            ODOM_FRAME_NAME,
+            VISION_FRAME_NAME,
+            get_a_tform_b,
+        )
 
+        frame_name = (
+            VISION_FRAME_NAME
+            if self.spot_command_frame == 'vision'
+            else ODOM_FRAME_NAME
+        )
+        state = self.spot_state_client.get_robot_state()
+        spot_tform_body = get_a_tform_b(
+            state.kinematic_state.transforms_snapshot,
+            frame_name,
+            BODY_FRAME_NAME,
+        )
+        if spot_tform_body is None:
+            raise RuntimeError(
+                f'Spot snapshot has no {frame_name}->body transform'
+            )
+        se2 = spot_tform_body.get_closest_se2_transform()
+        return se2.x, se2.y, se2.angle
+
+    def command_spot_to_goal(self, goal_x, goal_y, goal_heading):
         try:
             from bosdyn.client.robot_command import RobotCommandBuilder
         except ImportError as error:
@@ -285,9 +383,9 @@ class RobotGoalBridge(Node):
             ) from error
 
         command = RobotCommandBuilder.synchro_se2_trajectory_point_command(
-            goal_x=goal.pose.position.x,
-            goal_y=goal.pose.position.y,
-            goal_heading=yaw,
+            goal_x=goal_x,
+            goal_y=goal_y,
+            goal_heading=goal_heading,
             frame_name=self.spot_command_frame,
         )
         end_time = time.time() + self.spot_goal_duration
@@ -298,8 +396,7 @@ class RobotGoalBridge(Node):
         self.publish_status(
             'spot command sent: '
             f'{self.spot_command_frame} '
-            f'x={goal.pose.position.x:.2f}, '
-            f'y={goal.pose.position.y:.2f}, yaw={yaw:.2f}'
+            f'x={goal_x:.2f}, y={goal_y:.2f}, yaw={goal_heading:.2f}'
         )
         return command_id
 
@@ -316,6 +413,7 @@ class RobotGoalBridge(Node):
                 RobotCommandClient,
                 blocking_stand,
             )
+            from bosdyn.client.robot_state import RobotStateClient
         except ImportError as error:
             raise RuntimeError(
                 'bosdyn-client is not installed. Install requirements-field.txt '
@@ -344,6 +442,11 @@ class RobotGoalBridge(Node):
         )
         self.spot_command_client = self.spot.ensure_client(
             RobotCommandClient.default_service_name
+        )
+        # Read-only: used once per command to express a body-relative goal
+        # in Spot's frame. Never feeds localization or the map.
+        self.spot_state_client = self.spot.ensure_client(
+            RobotStateClient.default_service_name
         )
 
         if self.spot_auto_power_on:

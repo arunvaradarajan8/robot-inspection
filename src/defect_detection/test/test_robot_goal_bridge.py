@@ -7,6 +7,7 @@ import rclpy
 
 from defect_detection.digital_twin.robot_goal_bridge import (
     RobotGoalBridge,
+    compose_body_goal_in_spot_frame,
     normalize_angle,
 )
 
@@ -61,6 +62,54 @@ def test_arrival_error_uses_tf_distance_and_yaw():
 
         assert distance_error == pytest.approx(math.hypot(0.1, 0.2))
         assert yaw_error == pytest.approx(0.10)
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+def test_compose_body_goal_identity_spot_pose():
+    # Spot at its own origin: the body-relative goal passes straight through.
+    assert compose_body_goal_in_spot_frame(0.0, 0.0, 0.0, 2.0, 1.0, 0.5) == (
+        pytest.approx(2.0),
+        pytest.approx(1.0),
+        pytest.approx(0.5),
+    )
+
+
+def test_compose_body_goal_rotates_with_spot_heading():
+    # Spot at (10, 5) facing +90 deg: "2m ahead, 1m left" of the body lands
+    # at (10 - 1, 5 + 2) in Spot's frame, heading rotated with the body.
+    x, y, heading = compose_body_goal_in_spot_frame(
+        10.0, 5.0, math.pi / 2.0, 2.0, 1.0, 0.25,
+    )
+    assert x == pytest.approx(9.0)
+    assert y == pytest.approx(7.0)
+    assert heading == pytest.approx(math.pi / 2.0 + 0.25)
+
+
+def test_compose_body_goal_normalizes_heading():
+    _, _, heading = compose_body_goal_in_spot_frame(
+        0.0, 0.0, math.pi, 0.0, 0.0, math.pi,
+    )
+    assert -math.pi <= heading <= math.pi
+
+
+def test_body_relative_goal_uses_camera_tf():
+    os.environ['ROS_LOG_DIR'] = '/tmp'
+    rclpy.init()
+    node = RobotGoalBridge()
+    try:
+        # Camera localization: map->body has the robot at (1, 2) yaw 0.
+        transform = make_transform(1.0, 2.0, 0.0)
+        transform.header.stamp = node.get_clock().now().to_msg()
+        node.tf_buffer.set_transform(transform, 'test')
+
+        dx, dy, dyaw = node.body_relative_goal(make_goal(3.0, 2.0, 0.5))
+
+        # Goal at (3, 2) is 2m straight ahead of the body.
+        assert dx == pytest.approx(2.0)
+        assert dy == pytest.approx(0.0)
+        assert dyaw == pytest.approx(0.5)
     finally:
         node.destroy_node()
         rclpy.shutdown()

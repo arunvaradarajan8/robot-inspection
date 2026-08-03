@@ -89,10 +89,14 @@ RTAB-Map/VIO node) or the robot will not be localized.
 > would fuse Spot's kinematic pose back in — enable it only if you deliberately
 > want Spot's odometry in the estimate again.
 
-> **Autonomous motion caveat:** goals are computed in `depth_odom`, but Spot
-> only accepts move commands in its own frame, and with Spot localization off
-> there is no TF linking the two. So `ROBOT_GOAL_BRIDGE=true`/`spot_sdk` needs
-> that link added first; run supervised (walk Spot by tablet) until then.
+> **Autonomous motion with camera localization:** goals are computed in
+> `depth_odom`, but Spot only accepts move commands in its own frame. The
+> `spot_sdk` goal backend bridges this per command: the camera TF makes the
+> goal body-relative ("2 m ahead, 1 m left"), and Spot's transform snapshot —
+> read once, at command time — re-expresses that displacement in Spot's
+> command frame. Spot's pose is only the dialect the command is spoken in;
+> it never feeds the map, the pose estimate, or the arrival check (which
+> stays on the camera TF). Do first runs supervised all the same.
 
 **Depth camera (Oak-D Pro).** The only sensor that builds the map. Any depth
 camera works; the defaults match a Luxonis OAK running `depthai_ros`. It
