@@ -74,10 +74,14 @@ such as `/tmp/digital_twin_defects.yaml` back to Windows. Full raw scans should
 stay on the Windows/Perspective machine unless you deliberately add them to
 `Remote twin paths`.
 
-If Trimble Perspective has no supported automation API, the app still works as
-the coordination layer: the Jetson requests a scan, the app shows/logs it,
-Perspective exports the scan, and the app automatically transfers the finished
-file to the Jetson.
+The scan phase is operator-paced. When the robot reaches a chosen vantage it
+parks in SCAN and waits: the Jetson requests a scan and the app shows/logs it,
+but the robot does **not** move on until you press `Next scan location` (the
+mission-tab button or the browser dashboard). Take the X7 scan in Perspective,
+then press it to release the robot to the next vantage. A new export appearing
+in the watched folder is logged but, by default, does not release the robot on
+its own — tick `Release robot automatically when a new export appears` in
+Settings to restore that hands-off behaviour.
 
 ## Jetson URL
 

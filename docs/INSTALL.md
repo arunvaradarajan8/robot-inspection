@@ -1,31 +1,80 @@
-# Installation Guide
+# Installation Guide (from scratch)
 
-Two computers run this system. The split is not arbitrary — it follows from
-what each vendor's software will run on.
-
-| | Jetson (on Spot) | Windows host (tablet or laptop) |
-|---|---|---|
-| Runs | ROS 2, mapping, planning, Spot SDK | Trimble Perspective + the bridge app |
-| Talks to | Spot (pose, motion), the depth camera | The Trimble X7, the Jetson over HTTP/SSH |
-| Why there | Rides the robot; drives the depth camera and autonomy | **Perspective is Windows-only** — this is the whole reason a second machine exists |
-
-The Windows host does *no* perception and *no* autonomy. It is a scanner
-controller and an operator console. If it goes offline mid-mission the robot
-keeps mapping and navigating; it just stops getting scans.
+This guide takes you from **nothing installed** to a **working inspection
+mission**, in plain steps. You do not need to be a ROS expert — just follow it
+top to bottom. Where a step is easy to get wrong, there's a **✅ Success check**
+so you know it worked before moving on.
 
 ---
 
-## Part 1 — Jetson
+## What you're building
 
-Assumes JetPack 6 (Ubuntu 22.04/24.04 base) on an Orin-class module. Check
-what you have first, because every later choice depends on it:
+A robot (Boston Dynamics **Spot**) walks around a site, builds a map with a
+depth camera, drives itself to the best spots, and takes 3D laser scans with a
+**Trimble X7** scanner. You supervise it from a laptop.
+
+It runs on **two computers**, and there's a good reason for the split:
+
+| | **Jetson** (rides on Spot) | **Windows laptop** (you hold it) |
+|---|---|---|
+| Runs | The robot brain: mapping, planning, driving Spot | Trimble **Perspective** + a small "bridge" app |
+| Talks to | Spot and the depth camera | The Trimble X7 scanner, and the Jetson |
+| Why it exists | It's the autonomy computer, on the robot | **Perspective only runs on Windows** — that's the whole reason there are two computers |
+
+The laptop does **no** mapping or driving. It's just the scanner's remote and
+your console. If it drops offline mid-mission, the robot keeps mapping and
+walking — it just can't take scans until it's back.
+
+---
+
+## Before you begin
+
+**Hardware you need:**
+- Spot robot, powered, with its tablet controller.
+- An **NVIDIA Jetson Orin** (Nano/NX/AGX) mounted on Spot as a payload.
+- A **depth camera** (Luxonis **Oak‑D Pro**), USB‑connected to the Jetson.
+- A **Trimble X7** scanner (with its tripod).
+- A **Windows laptop** with Trimble **Perspective** installed.
+- A **Beryl AX** travel router (creates the field Wi‑Fi network).
+- A **USB Wi‑Fi adapter** for the laptop (so it can be on the scanner's Wi‑Fi
+  *and* the robot network at once). See the network guide below.
+
+**Accounts / software you need:**
+- Spot login: its **IP address, username, and password**.
+- Trimble Perspective already installed and **paired with your X7** — confirm
+  you can take a scan from Perspective alone *before* adding any of our software.
+
+**Roughly how it goes (about half a day the first time):**
+1. **Jetson** — install the robot software (most of the work).
+2. **Windows laptop** — install the bridge app.
+3. **Network** — put both computers on the Beryl Wi‑Fi so they can talk.
+4. **First run** — test with no hardware, then a supervised real mission.
+
+> **Tip:** Do the whole **no‑hardware test** at the end of Part 1 first. If that
+> runs, your software is good, and you've only got wiring and network left.
+
+---
+
+## Part 1 — Set up the Jetson (the robot's computer)
+
+Do all of this **on the Jetson** (SSH in, or plug in a monitor + keyboard).
+
+### 1.0 Check what you have
+
+Every later step depends on your Jetson's software version, so check first:
 
 ```bash
-cat /etc/nv_tegra_release
+cat /etc/nv_tegra_release            # shows your JetPack/L4T version
 sudo apt install -y python3-pip git curl
 ```
 
-### 1.1 ROS 2 Jazzy
+This guide assumes **JetPack 6** (based on Ubuntu 24.04). If yours is older
+(Ubuntu 22.04), see the note in step 1.1.
+
+### 1.1 Install ROS 2 Jazzy (the robot framework)
+
+**What this is:** ROS 2 is the plumbing all the robot programs use to talk to
+each other. "Jazzy" is the specific version. Copy‑paste this whole block:
 
 ```bash
 sudo apt install -y software-properties-common
@@ -47,142 +96,185 @@ sudo apt install -y \
   ros-jazzy-message-filters \
   ros-jazzy-rviz2
 
+# Make ROS available in every new terminal automatically:
 echo 'source /opt/ros/jazzy/setup.bash' >> ~/.bashrc
 source /opt/ros/jazzy/setup.bash
 ```
 
-> If JetPack pins you to Ubuntu 22.04, Jazzy has no binaries for it. Either
-> move to a JetPack release on 24.04, or run the stack in the OSRF `ros:jazzy`
-> container with `--runtime nvidia`. Do not try to source-build Jazzy on the
-> Jetson — it is hours of work and breaks on the next JetPack update.
+**✅ Success check:**
+```bash
+ros2 --help        # should print ROS command help, not "command not found"
+```
 
-### 1.2 Python dependencies
+> **On Ubuntu 22.04?** Jazzy has no packages for it. Either update to a JetPack
+> release built on 24.04, or run everything inside the official `ros:jazzy`
+> Docker container (`docker run --runtime nvidia ...`). **Don't** try to compile
+> ROS from source on the Jetson — it takes hours and breaks on updates.
 
-Mapping, exploration, and scan planning are plain NumPy over the occupancy
-grid — there is no GPU inference to set up. Just the ROS Python deps:
+### 1.2 Install the Python libraries
+
+**What this is:** the mapping and planning are plain math (NumPy) — there's no
+AI model to install, no GPU setup. Just a few Python packages:
 
 ```bash
 pip3 install opencv-python numpy pyyaml
 ```
 
-### 1.3 Spot SDK and workspace dependencies
+### 1.3 Install the Spot SDK and scan libraries
+
+**What this is:** the code that lets the Jetson talk to Spot and read `.las`
+scan files. These are listed in `requirements-field.txt` (Spot's `bosdyn-client`,
+plus `laspy`/`lazrs`):
 
 ```bash
 cd ~/ros2_ws
-pip3 install --user -r requirements-field.txt   # bosdyn-client, laspy, lazrs
+pip3 install --user -r requirements-field.txt
 ```
 
-### 1.4 Depth camera driver
+### 1.4 Install the depth‑camera driver
 
-The workspace does **not** launch your camera — it subscribes to topics. For a
-Luxonis OAK:
+**What this is:** the program that turns the Oak‑D camera into ROS data. Our
+software **subscribes** to the camera; it doesn't start it for you.
 
 ```bash
 sudo apt install -y ros-jazzy-depthai-ros
+# Let the Jetson talk to the camera over USB without root:
 echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="03e7", MODE="0666"' \
   | sudo tee /etc/udev/rules.d/80-movidius.rules
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
-The occupancy map needs a **point cloud**, not just a depth image. If your
-driver publishes only a depth image, add:
+The map needs a **point cloud** (3D dots), not just a flat depth image. If your
+camera driver only gives a depth image, also install this and run its
+`point_cloud_xyz` node to create the point‑cloud topic:
 
 ```bash
 sudo apt install -y ros-jazzy-depth-image-proc
 ```
 
-and run `depth_image_proc/point_cloud_xyz` to produce `MAP_DEPTH_POINTS_TOPIC`.
+### 1.5 (Optional) Fused localization
 
-### 1.4b Fused localization (optional)
-
-Spot's vision frame already walks the robot home, so this is optional. To
-fuse Spot's pose, a navX IMU, and the depth camera's visual odometry through
-an EKF (`FUSED_LOCALIZATION=true`), install `robot_localization`:
+Skip this the first time. Spot's own position tracking is good enough to walk
+the robot home. Later, for a steadier position estimate, you can blend Spot's
+pose + an IMU + the camera:
 
 ```bash
-sudo apt install -y ros-jazzy-robot-localization
+sudo apt install -y ros-jazzy-robot-localization   # only if FUSED_LOCALIZATION=true
 ```
 
-The navX bridge publishes `sensor_msgs/Imu`. In `relay` mode it republishes
-an Imu topic another driver already provides; in `serial` mode it reads the
-navX over USB/UART (`pip3 install pyserial`). Set the camera→IMU mount and
-the EKF inputs in `src/defect_detection/config/ekf.yaml` and
-`launch/fused_localization.launch.xml`, and verify the TF tree
-(`ros2 run tf2_tools view_frames`) before trusting it in the field.
+Details (the `ekf.yaml` inputs, the navX IMU bridge) are in
+`launch/fused_localization.launch.xml`. Leave it off (`FUSED_LOCALIZATION=false`)
+until everything else works.
 
-### 1.5 Build and configure
+### 1.6 Build the software
+
+**What this is:** "building" compiles our code into something ROS can run. Run
+this from the workspace folder:
 
 ```bash
 cd ~/ros2_ws
 colcon build --symlink-install
-source install/setup.bash
-
-cp config/field.env.example config/field.env
-# Set SPOT_IP, SPOT_USERNAME, SPOT_PASSWORD, and confirm the DEPTH_* topics
-# match `ros2 topic list` with your camera driver running.
+source install/setup.bash        # load what you just built into this terminal
 ```
 
-Confirm the topic names rather than trusting the defaults:
+**✅ Success check:** the build ends with `Summary: N packages finished` and no
+red `Failed` lines.
+
+> Every new terminal needs `source install/setup.bash` before running the
+> robot. To automate it: `echo 'source ~/ros2_ws/install/setup.bash' >> ~/.bashrc`
+
+### 1.7 Configure your site settings
+
+**What this is:** one file holds all your site‑specific values (Spot's password,
+the laptop's address, etc.). Copy the template and edit it:
+
+```bash
+cd ~/ros2_ws
+cp config/field.env.example config/field.env
+nano config/field.env            # or any editor
+```
+
+At minimum, set:
+- `SPOT_IP`, `SPOT_USERNAME`, `SPOT_PASSWORD` — how to reach and log into Spot.
+- `TRIMBLE_WINDOWS_URL` — the laptop's address, e.g. `http://10.0.0.20:8765`
+  (you'll finalize this in Part 3).
+
+Then confirm the camera topic names match your driver (don't trust the
+defaults):
 
 ```bash
 ros2 topic list | grep -E "rgb|depth|points"
 ```
+If the names differ, update the `IMAGE_TOPIC` / `MAP_DEPTH_POINTS_TOPIC` lines
+in `config/field.env` to match.
 
-### 1.6 Verify
+### 1.8 Prove it works with NO hardware
 
-```bash
-./scripts/field_preflight.sh mission
-```
-
-It checks the Spot SDK import and reachability of `SPOT_IP`. Then dry-run the
-whole loop with no hardware at all:
+Before touching the robot, run the whole loop in a pure‑software simulation.
+This is the single most useful check in the guide:
 
 ```bash
 ./scripts/run_field.sh mission --sim synthetic
 ```
 
+**✅ Success check:** a window (RViz) opens and you watch a simulated robot
+explore a map, drive to scan spots, and return "home." If this runs, **your
+Jetson software is fully installed and correct.** Press `Ctrl‑C` to stop.
+
+You can also run the built‑in preflight, which checks the Spot SDK and whether
+Spot answers on the network:
+
+```bash
+./scripts/field_preflight.sh mission
+```
+
 ---
 
-## Part 2 — Windows host
+## Part 2 — Set up the Windows laptop (the scanner console)
 
-Runs Trimble Perspective and the bridge app. Nothing else.
+This machine runs Trimble Perspective (which you already have) plus our small
+**bridge app**.
 
 ### 2.1 Prerequisites
 
-1. **Trimble Perspective**, installed and already paired with your X7 over its
-   Wi-Fi. Confirm you can scan from Perspective alone before adding software —
-   debugging the bridge and the scanner pairing at once is miserable.
-2. **Python 3.12 for Windows** from python.org. Tick *Add python.exe to PATH*.
+1. **Trimble Perspective** installed and already taking scans from your X7. Get
+   this working on its own first — debugging the scanner and our software at the
+   same time is painful.
+2. **Python 3.12 for Windows** from [python.org](https://www.python.org/). During
+   install, **tick "Add python.exe to PATH."**
 
-### 2.2 Bridge app
+### 2.2 Install and start the bridge app
+
+In a Command Prompt, from the repo folder:
 
 ```text
 cd tools\trimble_perspective_bridge
 "Install Windows Dependencies.bat"
 py windows_app.py
 ```
+(or just double‑click **`Launch Trimble Bridge.bat`**.)
 
-or double-click `Launch Trimble Bridge.bat`.
+**✅ Success check:** a window titled "TxDOT Digital Twin Inspection Console"
+opens, and a browser dashboard appears at `http://127.0.0.1:8765`.
 
-### 2.3 Configure
+### 2.3 Point it at the Jetson
 
-In the app's config tab:
+In the app's **Settings** tab:
 
 | Setting | Value |
 |---|---|
-| `jetson_host` / `jetson_user` | The Jetson's IP and login |
+| `jetson_host` | the Jetson's IP, e.g. `10.0.0.10` |
+| `jetson_user` | your Jetson login name |
 | `jetson_workspace` | `~/ros2_ws` |
 | `jetson_mode` | `mission` |
-| `export_dir` | Perspective's export folder — watched to detect scan completion |
-| `mission_output_dir` | Where the end-of-mission E57 is filed |
-| `auto_transfer` | **false** — scans stay on the scanner |
+| `windows_advertise_host` | the laptop's robot‑LAN IP, e.g. `10.0.0.20` |
+| `export_dir` | Perspective's scan export folder |
+| `mission_output_dir` | where the final E57 file is saved |
+| `auto_transfer` | **off** — scans stay on the scanner's SD card |
 
-The Jetson needs `TRIMBLE_WINDOWS_URL` in `config/field.env` pointing at this
-machine's IP on port 8765.
+### 2.4 Open the Windows firewall
 
-### 2.4 Firewall
-
-Windows will silently block the Jetson's requests otherwise:
+Windows silently blocks the Jetson otherwise. In an **Administrator** PowerShell:
 
 ```powershell
 New-NetFirewallRule -DisplayName "Trimble Bridge" -Direction Inbound `
@@ -191,68 +283,141 @@ New-NetFirewallRule -DisplayName "Trimble Bridge" -Direction Inbound `
 
 ---
 
-## Part 3 — Network
+## Part 3 — Connect the network
 
-All three devices on one LAN:
+The Jetson and the laptop have to be on the **same Wi‑Fi network** to talk. The
+**Beryl AX** router creates that network.
 
-| Link | Port | Direction |
+📄 **Full step‑by‑step (with a diagram) is in
+[`docs/field_network_setup.docx`](field_network_setup.docx)** — follow that for
+the router, the Jetson Wi‑Fi, and the laptop's USB Wi‑Fi adapter. The short
+version:
+
+- Three separate Wi‑Fi/wired networks that must **not** overlap:
+  - Spot ↔ Jetson: **wired** over Spot's payload port (`192.168.50.x`)
+  - Jetson ↔ laptop: the **Beryl** Wi‑Fi (`10.0.0.0/24`)
+  - laptop ↔ X7: the **scanner's own Wi‑Fi**
+- Give fixed addresses: Jetson `10.0.0.10`, laptop `10.0.0.20`.
+- The laptop needs **two Wi‑Fi radios** (its built‑in one on the X7, the USB
+  adapter on the Beryl) because one radio can't be on two Wi‑Fis at once.
+
+**What talks to what:**
+
+| From → To | Port | Purpose |
 |---|---|---|
-| Jetson → Spot | 443 (gRPC) | SDK: pose, motion |
-| Jetson → Windows | 8765 | Scan requests, status polling |
-| Windows → Jetson | 22 | SSH start/stop |
-| Windows ↔ X7 | Trimble Wi-Fi | Perspective controls the scanner |
+| Jetson → Spot | 443 | robot pose + motion (Spot SDK) |
+| Jetson → laptop | 8765 | asks for scans, checks status |
+| laptop → Jetson | 22 (SSH) | starts/stops the robot software |
+| laptop ↔ X7 | scanner Wi‑Fi | Perspective runs the scan |
 
-Set the same `ROS_DOMAIN_ID` (default 42) anywhere you run ROS.
+Set the **same `ROS_DOMAIN_ID`** (default `42`) on the Jetson.
 
-Test both directions before the robot leaves the bench:
-
+**✅ Success check — test both directions before the robot leaves the bench:**
 ```bash
 # On the Jetson
-ping <spot-ip> && ping <windows-ip>
-curl http://<windows-ip>:8765/status
+ping 10.0.0.20 && curl http://10.0.0.20:8765/status
 ```
-
 ```powershell
-# On Windows
-ssh <user>@<jetson-ip> "echo ok"
+# On the laptop
+ssh <user>@10.0.0.10 "echo ok"
 ```
+Both should succeed (the `curl` returns some JSON; the `ssh` prints `ok`).
 
 ---
 
-## Part 4 — First mission
+## Part 4 — Your first mission
 
-1. Windows: launch Perspective, then the bridge app.
-2. Jetson: `./scripts/run_field.sh mission` with `ROBOT_GOAL_BRIDGE=false`.
-   The stack proposes goals but **does not move the robot**. Walk Spot by
-   tablet and confirm `/digital_twin/map` grows and `/mission/state` advances.
-3. Confirm the sensors independently:
+**Always do a supervised, no‑motion run first.**
+
+1. **Laptop:** open Perspective, then start the bridge app.
+2. **Jetson:** run the mission with **motion turned off**:
    ```bash
-   ros2 topic hz /depth/points
-   ros2 topic echo /mission/state --once
+   ROBOT_GOAL_BRIDGE=false ./scripts/run_field.sh mission
    ```
-4. Only once all of that is clean, set `ROBOT_GOAL_BRIDGE=true` and
-   `ROBOT_GOAL_BACKEND=spot_sdk`. Keep the tablet E-Stop in hand.
-5. At the end: robot returns to start → state reaches `AWAITING_UPLOAD` → pull
-   the E57 off the X7's SD card → **Upload E57 + Finish** in the app.
+   The software plans and *suggests* where to go but **does not drive Spot**.
+   Walk Spot yourself with the tablet and watch the map fill in.
+3. **Confirm the pieces are alive:**
+   ```bash
+   ros2 topic hz /depth/points          # camera is feeding the map
+   ros2 topic echo /mission/state --once # mission is progressing
+   ```
+4. **How scanning works:** when the robot reaches a chosen spot it **parks and
+   waits** — it will *not* move on by itself. You take the scan in Perspective,
+   then press **"Next scan location"** in the bridge app to release it to the
+   next spot. (This is by design — the operator paces the scans.)
+5. **Only when all of that is clean**, enable real driving:
+   ```bash
+   ROBOT_GOAL_BRIDGE=true ROBOT_GOAL_BACKEND=spot_sdk ./scripts/run_field.sh mission
+   ```
+   **Keep the tablet E‑Stop in your hand.**
+6. **End of mission:** robot returns to its start → state shows
+   `AWAITING_UPLOAD` → copy the E57 file off the X7's SD card → press
+   **"Upload E57 + Finish"** in the app.
+
+---
+
+## Everyday use (after it's all installed)
+
+```bash
+# no-hardware demo (great for showing the flow):
+./scripts/run_field.sh mission --sim synthetic
+
+# real mission, no driving (supervised):
+ROBOT_GOAL_BRIDGE=false ./scripts/run_field.sh mission
+
+# real mission, autonomous driving (E-Stop in hand):
+ROBOT_GOAL_BRIDGE=true ROBOT_GOAL_BACKEND=spot_sdk ./scripts/run_field.sh mission
+```
+
+Other modes: `./scripts/run_field.sh demo` (real robot, invented site, open
+area only) and `./scripts/run_field.sh slam` (camera‑only mapping, no Spot or
+Trimble). Run `./scripts/run_field.sh --help` for all options.
 
 ---
 
 ## Troubleshooting
 
-**`torch.cuda.is_available()` is False** — you have a CPU wheel. Uninstall and
-reinstall from NVIDIA's Jetson index (§1.2).
+**`ros2: command not found`** — you didn't load ROS in this terminal. Run
+`source /opt/ros/jazzy/setup.bash` (and `source ~/ros2_ws/install/setup.bash`).
 
-**Engine fails to load** — built on different hardware or a different TensorRT.
-Rebuild on this Jetson (§1.3).
+**`colcon build` fails** — usually a missing `ros-jazzy-*` package from step
+1.1, or you're on Ubuntu 22.04 (see the note in 1.1). Read the first red error;
+it names the missing piece.
 
-**Robot stands still at every station for 5 minutes** — the Windows bridge is
-not reporting scan completion. Check `curl http://<windows-ip>:8765/status`
-returns a rising `scans_completed`. The 5 minutes is
-`TRIMBLE_SCAN_TIMEOUT_SEC` expiring.
+**The robot never moves to the next scan spot** — that's *expected*. It waits
+for you to press **"Next scan location"** in the bridge app. If pressing it does
+nothing, the Jetson can't reach the laptop: on the Jetson, check
+`curl http://10.0.0.20:8765/status` returns JSON with a `scans_completed`
+number. If that fails, revisit Part 3 (network) and the firewall (2.4).
 
-**Map has a hole under the robot** — depth camera not contributing. Check
-`MAP_DEPTH_POINTS_TOPIC` exists and that TF resolves from the map frame to the
-camera frame.
+**Jetson can't reach the laptop / no `wlan0`** — a network problem. Work through
+[`docs/field_network_setup.docx`](field_network_setup.docx); confirm both are on
+the Beryl Wi‑Fi with the right IPs.
 
-**Robot misses the start pose on return** — you are probably on `odom`. Set
-`SPOT_FRAME=vision`.
+**A hole in the map right under the robot** — the depth camera isn't feeding the
+map. Check the point‑cloud topic exists (`ros2 topic hz /depth/points`) and that
+your `MAP_DEPTH_POINTS_TOPIC` in `field.env` matches `ros2 topic list`.
+
+**Robot returns but misses its start spot** — you're probably using `odom`
+(which drifts). Set `SPOT_FRAME=vision` in `config/field.env`.
+
+**Spot doesn't answer** — wrong `SPOT_IP`, or it's not on the network yet. Run
+`./scripts/field_preflight.sh mission` and `ping <SPOT_IP>`.
+
+---
+
+## Mini‑glossary
+
+- **ROS 2 / Jazzy** — the framework the robot programs run on. "Jazzy" is the
+  version.
+- **colcon build** — compiles this project's code so ROS can run it.
+- **Occupancy map** — the 2D map of free vs. blocked space the robot builds from
+  the depth camera.
+- **Topic** — a named channel programs use to share data (e.g. `/depth/points`).
+- **TF** — ROS's bookkeeping of where each part is in space (camera vs. robot vs.
+  map).
+- **Payload port / GXP** — the port on Spot's back that powers and networks the
+  Jetson.
+- **field.env** — your one settings file (`config/field.env`).
+- **Bridge app** — the Windows program that relays scan requests between the
+  Jetson and Trimble Perspective.

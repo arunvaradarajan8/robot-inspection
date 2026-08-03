@@ -60,8 +60,12 @@ class ScanPlanner(Node):
                   possible.
 
     The best few well-separated cells become the scan stations. The node
-    drives to each in turn, triggers a scan, waits for it to finish, then
-    reports that scanning is complete so the mission can walk home. No
+    drives to each in turn and parks in an explicit SCAN state, where it
+    holds position and waits for a human to release it to the next station
+    (an operator "Next scan location" press, delivered over ROS as
+    ``scan_complete``). It does not advance on a filesystem export or a
+    timer by default, so the operator controls the pace. Once every station
+    is done it reports scanning complete so the mission can walk home. No
     object detection is involved: the stations come only from the shape of
     the Oak-D map.
     """
@@ -98,11 +102,17 @@ class ScanPlanner(Node):
         # Falloff of the centrality term, in metres from the structure
         # centroid. Larger keeps far-but-open vantages competitive.
         self.declare_parameter('centrality_scale_m', 10.0)
-        # Timeouts so a stuck drive or a scan that never reports back cannot
-        # strand the mission in the scan phase.
+        # A drive that stalls still times out and skips the station. The
+        # SCAN wait, though, is human-gated: scan_timeout_sec of 0 means the
+        # robot parks and waits for the operator indefinitely, releasing
+        # only on scan_complete. Set it above zero to add a safety net that
+        # auto-skips a station the operator never releases.
         self.declare_parameter('leg_timeout_sec', 90.0)
-        self.declare_parameter('scan_timeout_sec', 300.0)
+        self.declare_parameter('scan_timeout_sec', 0.0)
         self.declare_parameter('scan_settle_sec', 2.0)
+        # How often, in seconds, to re-announce that the robot is parked and
+        # waiting for the operator so the console keeps showing the prompt.
+        self.declare_parameter('scan_prompt_period_sec', 15.0)
 
         self.map_topic = self.get_parameter(
             'map_topic'
@@ -161,6 +171,9 @@ class ScanPlanner(Node):
         self.scan_settle = self.get_parameter(
             'scan_settle_sec'
         ).get_parameter_value().double_value
+        self.scan_prompt_period = self.get_parameter(
+            'scan_prompt_period_sec'
+        ).get_parameter_value().double_value
 
         if self.max_scan_stations <= 0:
             raise ValueError('max_scan_stations must be greater than zero')
@@ -216,10 +229,12 @@ class ScanPlanner(Node):
         # None until the mission asks us to scan. Then a list of remaining
         # (x, y, yaw) stations; empty list means scanning finished.
         self.stations = None
-        # 'driving' (heading to the station) or 'scanning' (parked, waiting
-        # for the X7 to finish).
+        # 'driving' (heading to the station) or 'scanning' (parked in the
+        # SCAN state, waiting for the operator to release it to the next
+        # station).
         self.phase = None
         self.phase_since = 0.0
+        self.last_prompt = 0.0
         self.arrived = False
         self.finished = False
 
@@ -259,7 +274,9 @@ class ScanPlanner(Node):
 
     def scan_complete_callback(self, message):
         if message.data and self.phase == 'scanning':
-            self.publish_status('scan finished; moving to the next station')
+            self.publish_status(
+                'operator released the robot; moving to the next station'
+            )
             self.stations.pop(0)
             self.begin_next_leg()
 
@@ -343,23 +360,34 @@ class ScanPlanner(Node):
                 self.stations.pop(0)
                 self.begin_next_leg()
         elif self.phase == 'scanning':
-            if now - self.phase_since > self.scan_timeout:
+            if self.scan_timeout > 0.0 and now - self.phase_since > self.scan_timeout:
                 self.publish_status(
-                    'scan station timed out waiting for the X7; skipping it'
+                    'scan station timed out waiting for the operator; skipping it'
                 )
                 self.stations.pop(0)
                 self.begin_next_leg()
+            elif (
+                self.scan_prompt_period > 0.0
+                and now - self.last_prompt >= self.scan_prompt_period
+            ):
+                self.last_prompt = now
+                self.publish_status(
+                    'SCAN: parked at the vantage; waiting for the operator to '
+                    'release the robot to the next scan location'
+                )
 
     def trigger_scan(self):
         if self.phase == 'scanning':
             return
         self.phase = 'scanning'
         self.phase_since = time.monotonic()
+        self.last_prompt = self.phase_since
         x, y, _ = self.stations[0]
         reason = String()
         reason.data = (
-            f'X7 scan at chosen vantage x={x:.2f}, y={y:.2f} '
-            f'({len(self.stations)} station(s) remaining)'
+            f'SCAN: parked at vantage x={x:.2f}, y={y:.2f} '
+            f'({len(self.stations)} station(s) remaining). Waiting for the '
+            'operator to release the robot to the next scan location.'
         )
         self.scan_reason_publisher.publish(reason)
         self.scan_required_publisher.publish(Bool(data=True))

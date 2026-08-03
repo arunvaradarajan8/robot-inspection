@@ -110,7 +110,7 @@ clients. The Windows host runs Perspective and the bridge app.
 | State | What happens |
 |---|---|
 | `EXPLORING` | The frontier planner picks goals; every arrival is recorded as a breadcrumb. |
-| `SCANNING` | Exploration is gated off; the scan planner drives to its chosen vantages and triggers the X7 at each. |
+| `SCANNING` | Exploration is gated off; the scan planner drives to its chosen vantages, parks in SCAN at each, and waits for the operator to release it to the next. |
 | `RETURNING` | The recorded stations are replayed in reverse, ending at the start pose. |
 | `AWAITING_UPLOAD` | The robot is home. The mission stays open until the E57 is filed. |
 | `COMPLETE` | Mission summary written. |
@@ -119,9 +119,10 @@ Exploration ends on whichever comes first: no frontier left inside the
 exploration radius, the station limit, the excursion limit
 (`MISSION_MAX_EXCURSION_M`, default 40 m), a duration cap, or an operator
 command on `/mission/return_home`. The mission then enters `SCANNING`; when the
-scan planner reports done on `/mission/scanning_complete` (or the scan phase
-times out), the robot walks home. A mission summary — start pose, every
-station, timings — is written to `MISSION_SUMMARY_PATH`.
+scan planner reports done on `/mission/scanning_complete`, the robot walks home.
+The scan phase is operator-paced, so by default the mission waits as long as the
+operator needs (`MISSION_SCANNING_TIMEOUT_SEC=0`). A mission summary — start
+pose, every station, timings — is written to `MISSION_SUMMARY_PATH`.
 
 The frontier planner, the scan planner, and the mission manager all publish to
 `/infrastructure/inspection_goal`. `/mission/allow_exploration` (frontier
@@ -136,13 +137,20 @@ i.e. clearance and broad sightlines for the tripod) times *centrality*
 (closeness to the mapped structure's centroid, with `SCAN_CENTRALITY_SCALE_M`
 falloff). It picks the best `SCAN_MAX_STATIONS` cells that are at least
 `SCAN_MIN_SEPARATION_M` apart, so the scans cover different parts of the site,
-then drives to each and triggers the X7. No object detection is involved.
+then drives to each, parks in SCAN, and triggers the X7. No object detection is
+involved.
 
-While a scan runs the robot must stand still. Because nothing comes back from
-the X7 over ROS, the Windows bridge reports completion on
-`/digital_twin/scan_complete`, and that is what advances the scan planner to
-the next vantage. A `SCAN_WAIT_TIMEOUT_SEC` safeguard skips a station if the
-report never arrives.
+At each vantage the robot holds position in SCAN and **waits for a human** to
+release it to the next scan location — it does not advance on a filesystem
+export or a timer. The operator presses **"Next scan location"** in the Windows
+console (`tools/trimble_perspective_bridge/windows_app.py`, tk button or the
+browser dashboard); that is delivered over ROS on `/digital_twin/scan_complete`,
+which advances the scan planner to the next vantage. The wait is unbounded by
+default (`SCAN_WAIT_TIMEOUT_SEC=0`, `TRIMBLE_SCAN_TIMEOUT_SEC=0`); set either
+above zero to add a safety auto-release. To restore the old hands-off behaviour
+where a finished Perspective export releases the robot on its own, enable
+*"Release robot automatically when a new export appears"* in the console
+settings (`advance_on_file_export`).
 
 ## Simulation
 
@@ -262,9 +270,10 @@ py tools\trimble_perspective_bridge\windows_app.py
 ```
 
 `Start Mission` SSHes into the Jetson, builds the workspace, and launches the
-stack. `Scan Finished` marks a scan complete manually if Perspective's export
-folder is not being watched. `Upload E57 + Finish` files the scanner's E57 into
-`mission_output_dir` and closes the mission on the robot.
+stack. `Next scan location` releases the robot from SCAN so it drives to the
+next vantage — this is how the operator paces the scan phase. `Upload E57 +
+Finish` files the scanner's E57 into `mission_output_dir` and closes the mission
+on the robot.
 
 Scan file transfer to the Jetson is **off** by default (`auto_transfer`), since
 no scan feeds the live loop any more. Turn it on only to debug the legacy

@@ -242,7 +242,7 @@ def dashboard_html():
           <button class="primary" onclick="post('/ui/start')">Start Mission</button>
           <button class="danger" onclick="post('/ui/stop')">Stop + Download Twin</button>
           <button class="secondary" onclick="post('/scan_request', {scan_type:'manual', reason:'dashboard manual scan'})">Request Scan</button>
-          <button class="secondary" onclick="post('/scan_finished', {reason:'dashboard marked scan finished'})">Scan Finished</button>
+          <button class="secondary" onclick="post('/scan_finished', {reason:'dashboard released the robot to the next scan location'})">Next Scan Location</button>
         </div>
       </section>
       <section class="card">
@@ -412,6 +412,13 @@ class TrimblePerspectiveBridgeApp:
         'auto_transfer': False,
         'transfer_reduced_scan': False,
         'auto_scan_on_waypoint': True,
+        # The robot parks in SCAN at each vantage and is released to the next
+        # scan location only when the operator presses "Next scan location".
+        # When this is off (default), a new Perspective export no longer
+        # releases the robot on its own; the folder is still watched for the
+        # log and optional transfer. Turn it on to restore the old behaviour
+        # where a finished export advances the robot automatically.
+        'advance_on_file_export': False,
         # Where the operator's end-of-mission E57 export is filed.
         'mission_output_dir': str(Path.home() / 'Documents' / 'MissionOutput'),
         'logo_path': '',
@@ -620,7 +627,7 @@ class TrimblePerspectiveBridgeApp:
         ).pack(side='left', padx=8)
         ttk.Button(
             actions,
-            text='Scan Finished',
+            text='Next Scan Location',
             command=self.scan_finished_button,
             style='Tool.TButton',
         ).pack(side='left', padx=8)
@@ -759,6 +766,12 @@ class TrimblePerspectiveBridgeApp:
         )
         self.add_check(
             form,
+            'advance_on_file_export',
+            'Release robot automatically when a new export appears '
+            '(off = wait for "Next scan location")',
+        )
+        self.add_check(
+            form,
             'open_browser_on_start',
             'Open browser dashboard on startup',
         )
@@ -858,11 +871,14 @@ class TrimblePerspectiveBridgeApp:
             webbrowser.open(f'http://127.0.0.1:{port}/')
 
     def watch_exports(self):
-        """Watch Perspective's folder to learn when a scan has finished.
+        """Watch Perspective's folder and log when a scan export appears.
 
-        The scan file itself stays put: seeing it appear is only used as
-        the completion signal that releases the robot. Transfer is opt-in
-        and off by default.
+        By default this no longer releases the robot: the robot parks in
+        SCAN and is advanced to the next station only when the operator
+        presses "Next scan location". Set advance_on_file_export to restore
+        the old behaviour where a finished export releases the robot on its
+        own. The scan file itself stays put; transfer is opt-in and off by
+        default.
         """
         while not self.stop_event.is_set():
             try:
@@ -870,9 +886,16 @@ class TrimblePerspectiveBridgeApp:
                 if scan and scan != self.last_seen_scan:
                     if file_is_stable(scan, float(self.config['stable_age_sec'])):
                         self.last_seen_scan = scan
-                        self.events.put(
-                            ('scan_finished', {'reason': f'new export {scan.name}'})
-                        )
+                        if self.config.get('advance_on_file_export', False):
+                            self.events.put(
+                                ('scan_finished', {'reason': f'new export {scan.name}'})
+                            )
+                        else:
+                            self.events.put((
+                                'log',
+                                f'New export {scan.name}; robot stays in SCAN '
+                                'until the operator presses "Next scan location".',
+                            ))
                         if self.config.get('auto_transfer', False):
                             self.transfer_scan(scan)
                 time.sleep(2.0)
@@ -970,7 +993,9 @@ class TrimblePerspectiveBridgeApp:
         self.log(f'Scan complete ({self.scans_completed}): {reason}')
 
     def scan_finished_button(self):
-        self.handle_scan_finished({'reason': 'operator marked the scan finished'})
+        self.handle_scan_finished(
+            {'reason': 'operator released the robot to the next scan location'}
+        )
 
     def handle_camera_frame(self, payload):
         self.latest_camera_payload = payload

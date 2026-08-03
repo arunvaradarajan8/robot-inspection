@@ -275,7 +275,7 @@ exec ros2 launch pointcloud_bridge full_pipeline.launch.xml \
   scan_openness_radius_m:="${SCAN_OPENNESS_RADIUS_M:-3.0}" \
   scan_min_openness:="${SCAN_MIN_OPENNESS:-0.6}" \
   scan_centrality_scale_m:="${SCAN_CENTRALITY_SCALE_M:-10.0}" \
-  scan_wait_timeout_sec:="${SCAN_WAIT_TIMEOUT_SEC:-300.0}" \
+  scan_wait_timeout_sec:="${SCAN_WAIT_TIMEOUT_SEC:-0.0}" \
   spot_localization:="${spot_localization}" \
   spot_frame:="${SPOT_FRAME:-vision}" \
   spot_odom_topic:="${SPOT_ODOM_TOPIC:-/spot/odom}" \
@@ -293,7 +293,7 @@ exec ros2 launch pointcloud_bridge full_pipeline.launch.xml \
   mission_max_excursion_m:="${MISSION_MAX_EXCURSION_M:-40.0}" \
   mission_duration_sec:="${MISSION_DURATION_SEC:-0.0}" \
   mission_home_position_tolerance_m:="${MISSION_HOME_POSITION_TOLERANCE_M:-1.0}" \
-  trimble_scan_timeout_sec:="${TRIMBLE_SCAN_TIMEOUT_SEC:-300.0}" \
+  trimble_scan_timeout_sec:="${TRIMBLE_SCAN_TIMEOUT_SEC:-0.0}" \
   robot_goal_bridge:="${ROBOT_GOAL_BRIDGE:-false}" \
   robot_goal_backend:="${ROBOT_GOAL_BACKEND:-dry_run}" \
   spot_command_url:="${SPOT_COMMAND_URL:-}" \

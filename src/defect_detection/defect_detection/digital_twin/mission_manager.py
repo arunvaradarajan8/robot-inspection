@@ -73,9 +73,13 @@ class MissionManager(Node):
             'scanning_complete_topic',
             '/mission/scanning_complete',
         )
-        # Give up on the scan phase and walk home if the scan planner never
-        # reports back (e.g. every station timed out).
-        self.declare_parameter('scanning_timeout_sec', 600.0)
+        # The scan phase is operator-paced: the robot parks at each vantage
+        # and waits for a human to release it to the next one, so there is no
+        # fixed wall-clock budget. 0 disables the whole-phase timeout and lets
+        # the mission wait for the operator to work through every station. Set
+        # it above zero only as a safety net to walk home if the scan planner
+        # never reports back.
+        self.declare_parameter('scanning_timeout_sec', 0.0)
         self.declare_parameter('summary_path', '/tmp/mission_summary.yaml')
         # Mission end conditions. Any one of them ends exploration.
         self.declare_parameter('max_stations', 0)
@@ -360,6 +364,7 @@ class MissionManager(Node):
         if self.return_goal_pending:
             if now - self.return_goal_sent < self.return_leg_timeout:
                 return
+
             self.get_logger().warning(
                 'Return leg timed out; skipping to the next one'
             )

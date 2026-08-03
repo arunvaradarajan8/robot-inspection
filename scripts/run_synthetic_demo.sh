@@ -41,8 +41,10 @@ echo "  2. The frontier planner publishes exploration goals; the simulated"
 echo "     robot drives to them and maps the bounded radius."
 echo "  3. Exploration ends; the scan planner ranks map vantages by"
 echo "     openness x centrality and drives to the best few."
-echo "  4. The synthetic X7 writes a LAS at each vantage (nothing reads it"
-echo "     back; it stands in for the scanner's SD card)."
+echo "  4. At each vantage the robot parks in SCAN and waits to be released"
+echo "     to the next scan location. On real hardware the operator presses"
+echo "     'Next scan location'; here the synthetic X7 writes a LAS and"
+echo "     auto-releases the robot as a stand-in for that press."
 echo "  5. The mission manager walks the robot back to its start pose."
 echo
 

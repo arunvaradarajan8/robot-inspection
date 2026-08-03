@@ -291,6 +291,34 @@ def test_scan_stations_empty_without_structure():
         rclpy.shutdown()
 
 
+def test_scan_planner_waits_in_scan_until_the_operator_releases_it():
+    os.environ['ROS_LOG_DIR'] = '/tmp'
+    rclpy.init()
+    node = ScanPlanner()
+    try:
+        # Human-gated: no auto-skip and no periodic prompt noise in the test.
+        node.scan_timeout = 0.0
+        node.scan_prompt_period = 0.0
+        node.stations = [(1.0, 0.0, 0.0), (5.0, 0.0, 0.0)]
+
+        node.trigger_scan()
+        assert node.phase == 'scanning'
+
+        # Parked in SCAN: ticks alone must never advance the robot; only the
+        # operator's release (scan_complete) does.
+        for _ in range(5):
+            node.tick()
+        assert node.phase == 'scanning'
+        assert len(node.stations) == 2
+
+        node.scan_complete_callback(Bool(data=True))
+        assert len(node.stations) == 1
+        assert node.phase == 'driving'
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
 # ---- mission lifecycle -------------------------------------------------
 
 

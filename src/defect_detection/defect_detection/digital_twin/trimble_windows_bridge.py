@@ -68,7 +68,11 @@ class TrimbleWindowsBridge(Node):
         # single station.
         self.declare_parameter('scan_complete_topic', '/digital_twin/scan_complete')
         self.declare_parameter('status_poll_period_sec', 2.0)
-        self.declare_parameter('scan_timeout_sec', 300.0)
+        # The robot parks in SCAN and waits for the operator to release it to
+        # the next station. 0 means wait for the operator indefinitely (only
+        # a "Next scan location" press releases the robot). Set it above zero
+        # to add a safety net that releases the robot after that many seconds.
+        self.declare_parameter('scan_timeout_sec', 0.0)
         # Closes the mission once the operator has filed the E57 that the
         # Trimble held on its SD card for the whole run.
         self.declare_parameter('upload_complete_topic', '/mission/upload_complete')
@@ -417,9 +421,13 @@ class TrimbleWindowsBridge(Node):
                 self.publish_scan_complete('Trimble reported the scan finished')
                 return
 
-        if self.scan_in_flight and now - self.scan_started > self.scan_timeout:
+        if (
+            self.scan_in_flight
+            and self.scan_timeout > 0.0
+            and now - self.scan_started > self.scan_timeout
+        ):
             self.publish_scan_complete(
-                f'no scan completion within {self.scan_timeout:.0f}s; '
+                f'no operator release within {self.scan_timeout:.0f}s; '
                 'releasing the robot anyway'
             )
 
