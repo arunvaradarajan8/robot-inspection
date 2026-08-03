@@ -40,13 +40,15 @@ walking — it just can't take scans until it's back.
   *and* the robot network at once). See the network guide below.
 
 **Accounts / software you need:**
+- The **GitHub repository** (this project). If it's private, make sure your
+  GitHub account has access before you start.
 - Spot login: its **IP address, username, and password**.
 - Trimble Perspective already installed and **paired with your X7** — confirm
   you can take a scan from Perspective alone *before* adding any of our software.
 
 **Roughly how it goes (about half a day the first time):**
-1. **Jetson** — install the robot software (most of the work).
-2. **Windows laptop** — install the bridge app.
+1. **Jetson** — download the code and install the robot software (most of the work).
+2. **Windows laptop** — download the code and install the bridge app.
 3. **Network** — put both computers on the Beryl Wi‑Fi so they can talk.
 4. **First run** — test with no hardware, then a supervised real mission.
 
@@ -55,23 +57,72 @@ walking — it just can't take scans until it's back.
 
 ---
 
+## What gets installed where (read this first)
+
+This is the most common source of confusion, so keep it straight:
+
+> **The entire robot pipeline — ROS, mapping, planning, Spot, the camera — runs
+> on the JETSON. The Windows laptop runs ONLY the scanner console (Trimble
+> Perspective + the bridge app). No part of the ROS pipeline runs on Windows.**
+
+| Software | **Jetson** (Ubuntu, on Spot) | **Windows laptop** |
+|---|:---:|:---:|
+| ROS 2 Jazzy (+ `ros-jazzy-*` packages) | ✅ | ❌ |
+| Python mapping libs (`numpy`, `opencv-python`, `pyyaml`) | ✅ | ❌ |
+| Spot SDK (`bosdyn-client`) + scan libs (`laspy`, `lazrs`) | ✅ | ❌ |
+| Depth‑camera driver (`depthai-ros`) | ✅ | ❌ |
+| `colcon build` of this project | ✅ | ❌ |
+| **Trimble Perspective** (vendor app) | ❌ | ✅ |
+| **Python 3.12 for Windows** + bridge‑app deps | ❌ | ✅ |
+| This project's code (git clone) | ✅ full workspace | ✅ only the `tools/trimble_perspective_bridge` folder is used |
+
+In one line: **anything about ROS / Spot / the camera → Jetson only. Anything
+about Trimble Perspective → Windows only.** The two machines just message each
+other over the network (Part 3).
+
+---
+
 ## Part 1 — Set up the Jetson (the robot's computer)
 
 Do all of this **on the Jetson** (SSH in, or plug in a monitor + keyboard).
 
-### 1.0 Check what you have
+### 1.0 Check what you have, and install the basics
 
-Every later step depends on your Jetson's software version, so check first:
+Every later step depends on your Jetson's software version, so check first, and
+install the tools you'll need to download the code:
 
 ```bash
 cat /etc/nv_tegra_release            # shows your JetPack/L4T version
+sudo apt update
 sudo apt install -y python3-pip git curl
 ```
 
 This guide assumes **JetPack 6** (based on Ubuntu 24.04). If yours is older
-(Ubuntu 22.04), see the note in step 1.1.
+(Ubuntu 22.04), see the note in step 1.2.
 
-### 1.1 Install ROS 2 Jazzy (the robot framework)
+### 1.1 Download this project (the code)
+
+**What this is:** the robot software lives in a GitHub repository. You "clone"
+(download) it into a folder called `ros2_ws` in your home directory — that
+folder is your **workspace**, and the rest of this guide runs commands from
+inside it.
+
+```bash
+cd ~
+git clone https://github.com/woopers6/robot-inspection.git ros2_ws
+cd ros2_ws
+```
+
+**✅ Success check:**
+```bash
+ls          # you should see: src  scripts  config  docs  tools  README.md ...
+```
+
+> If `git clone` asks for a username/password, the repo is private — log in with
+> your GitHub account (or a personal access token). If you were given a `.zip`
+> instead, unzip it to `~/ros2_ws` and continue.
+
+### 1.2 Install ROS 2 Jazzy (the robot framework)
 
 **What this is:** ROS 2 is the plumbing all the robot programs use to talk to
 each other. "Jazzy" is the specific version. Copy‑paste this whole block:
@@ -111,7 +162,7 @@ ros2 --help        # should print ROS command help, not "command not found"
 > Docker container (`docker run --runtime nvidia ...`). **Don't** try to compile
 > ROS from source on the Jetson — it takes hours and breaks on updates.
 
-### 1.2 Install the Python libraries
+### 1.3 Install the Python libraries
 
 **What this is:** the mapping and planning are plain math (NumPy) — there's no
 AI model to install, no GPU setup. Just a few Python packages:
@@ -120,7 +171,7 @@ AI model to install, no GPU setup. Just a few Python packages:
 pip3 install opencv-python numpy pyyaml
 ```
 
-### 1.3 Install the Spot SDK and scan libraries
+### 1.4 Install the Spot SDK and scan libraries
 
 **What this is:** the code that lets the Jetson talk to Spot and read `.las`
 scan files. These are listed in `requirements-field.txt` (Spot's `bosdyn-client`,
@@ -131,7 +182,7 @@ cd ~/ros2_ws
 pip3 install --user -r requirements-field.txt
 ```
 
-### 1.4 Install the depth‑camera driver
+### 1.5 Install the depth‑camera driver
 
 **What this is:** the program that turns the Oak‑D camera into ROS data. Our
 software **subscribes** to the camera; it doesn't start it for you.
@@ -152,7 +203,7 @@ camera driver only gives a depth image, also install this and run its
 sudo apt install -y ros-jazzy-depth-image-proc
 ```
 
-### 1.5 (Optional) Fused localization
+### 1.6 (Optional) Fused localization
 
 Skip this the first time. Spot's own position tracking is good enough to walk
 the robot home. Later, for a steadier position estimate, you can blend Spot's
@@ -166,7 +217,7 @@ Details (the `ekf.yaml` inputs, the navX IMU bridge) are in
 `launch/fused_localization.launch.xml`. Leave it off (`FUSED_LOCALIZATION=false`)
 until everything else works.
 
-### 1.6 Build the software
+### 1.7 Build the software
 
 **What this is:** "building" compiles our code into something ROS can run. Run
 this from the workspace folder:
@@ -183,7 +234,7 @@ red `Failed` lines.
 > Every new terminal needs `source install/setup.bash` before running the
 > robot. To automate it: `echo 'source ~/ros2_ws/install/setup.bash' >> ~/.bashrc`
 
-### 1.7 Configure your site settings
+### 1.8 Configure your site settings
 
 **What this is:** one file holds all your site‑specific values (Spot's password,
 the laptop's address, etc.). Copy the template and edit it:
@@ -208,7 +259,7 @@ ros2 topic list | grep -E "rgb|depth|points"
 If the names differ, update the `IMAGE_TOPIC` / `MAP_DEPTH_POINTS_TOPIC` lines
 in `config/field.env` to match.
 
-### 1.8 Prove it works with NO hardware
+### 1.9 Prove it works with NO hardware
 
 Before touching the robot, run the whole loop in a pure‑software simulation.
 This is the single most useful check in the guide:
@@ -233,7 +284,19 @@ Spot answers on the network:
 ## Part 2 — Set up the Windows laptop (the scanner console)
 
 This machine runs Trimble Perspective (which you already have) plus our small
-**bridge app**.
+**bridge app** — and **nothing from Part 1**: no ROS, no Spot SDK, no camera
+driver, no `colcon build`. Just Perspective, Python 3.12, and the bridge.
+
+### 2.0 Get the code onto the laptop
+
+The bridge app is part of the same project, so you need the code here too. Two
+easy ways:
+
+- **Easiest:** on the GitHub page, click the green **Code ▸ Download ZIP**, then
+  unzip it (e.g. to `C:\robot-inspection`).
+- **Or with Git:** install [Git for Windows](https://git-scm.com/download/win),
+  then in a folder run
+  `git clone https://github.com/woopers6/robot-inspection.git`.
 
 ### 2.1 Prerequisites
 
@@ -245,7 +308,7 @@ This machine runs Trimble Perspective (which you already have) plus our small
 
 ### 2.2 Install and start the bridge app
 
-In a Command Prompt, from the repo folder:
+In a Command Prompt, go into the folder you just downloaded, then:
 
 ```text
 cd tools\trimble_perspective_bridge
@@ -377,11 +440,15 @@ Trimble). Run `./scripts/run_field.sh --help` for all options.
 
 ## Troubleshooting
 
+**`git clone` asks for a password / "repository not found"** — the repo is
+private and your GitHub account needs access, or you mistyped the URL. Log in
+with a personal access token, or use the Download‑ZIP option.
+
 **`ros2: command not found`** — you didn't load ROS in this terminal. Run
 `source /opt/ros/jazzy/setup.bash` (and `source ~/ros2_ws/install/setup.bash`).
 
 **`colcon build` fails** — usually a missing `ros-jazzy-*` package from step
-1.1, or you're on Ubuntu 22.04 (see the note in 1.1). Read the first red error;
+1.2, or you're on Ubuntu 22.04 (see the note in 1.2). Read the first red error;
 it names the missing piece.
 
 **The robot never moves to the next scan spot** — that's *expected*. It waits
@@ -408,6 +475,9 @@ your `MAP_DEPTH_POINTS_TOPIC` in `field.env` matches `ros2 topic list`.
 
 ## Mini‑glossary
 
+- **Repository (repo)** — the project's code, stored on GitHub. You "clone" it to
+  download a copy.
+- **Workspace** — the `~/ros2_ws` folder that holds the code and the built output.
 - **ROS 2 / Jazzy** — the framework the robot programs run on. "Jazzy" is the
   version.
 - **colcon build** — compiles this project's code so ROS can run it.
