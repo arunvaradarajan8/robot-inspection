@@ -109,7 +109,7 @@ inside it.
 
 ```bash
 cd ~
-git clone https://github.com/woopers6/robot-inspection.git ros2_ws
+git clone https://github.com/arunvaradarajan8/robot-inspection.git ros2_ws
 cd ros2_ws
 ```
 
@@ -305,7 +305,7 @@ easy ways:
   unzip it (e.g. to `C:\robot-inspection`).
 - **Or with Git:** install [Git for Windows](https://git-scm.com/download/win),
   then in a folder run
-  `git clone https://github.com/woopers6/robot-inspection.git`.
+  `git clone https://github.com/arunvaradarajan8/robot-inspection.git`.
 
 ### 2.1 Prerequisites
 
