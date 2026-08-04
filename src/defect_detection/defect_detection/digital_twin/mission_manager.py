@@ -394,7 +394,7 @@ class MissionManager(Node):
             'upload before closing the mission.'
         )
 
-    # ---- helpers ------------------------------------------------------
+    # ---- helpers haha 67 ------------------------------------------------------
 
     def robot_pose(self):
         try:
