@@ -66,13 +66,17 @@ elif [[ "${SIM}" == "none" && "${MODE}" != "slam" ]]; then
   exit 1
 fi
 
+set +u
 source /opt/ros/jazzy/setup.bash
+set -u
 if [[ ! -f "${WORKSPACE_ROOT}/install/setup.bash" ]]; then
   echo "Workspace is not built. Run: colcon build --symlink-install"
   exit 1
 fi
 # shellcheck disable=SC1091
+set +u
 source "${WORKSPACE_ROOT}/install/setup.bash"
+set -u
 
 export ROS_LOG_DIR="${ROS_LOG_DIR:-${WORKSPACE_ROOT}/log/field}"
 mkdir -p "${ROS_LOG_DIR}"
